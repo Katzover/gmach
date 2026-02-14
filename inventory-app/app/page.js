@@ -993,7 +993,7 @@ export default function Home() {
       {showMassMode && massMode === 'take' && (
         <div className="modal" onMouseDown={() => closeAllModals()}>
           <div className="modal-form" style={{ maxHeight: '90vh', overflowY: 'auto', maxWidth: '600px' }} onMouseDown={e => e.stopPropagation()}>
-            <h2>השאלה המונית</h2>
+            <h2>השאלה</h2>
             
             <input
               placeholder="מי לוקח"
@@ -1077,7 +1077,7 @@ export default function Home() {
       {showMassMode && massMode === 'return' && (
         <div className="modal" onMouseDown={() => closeAllModals()}>
           <div className="modal-form" style={{ maxHeight: '90vh', overflowY: 'auto', maxWidth: '600px' }} onMouseDown={e => e.stopPropagation()}>
-            <h2>החזרה המונית</h2>
+            <h2>החזרה</h2>
             
             <select
               value={massReturnBorrower}
