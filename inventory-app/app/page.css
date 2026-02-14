@@ -45,7 +45,7 @@ h1 {
   flex-direction: column;
   align-items: center;
   position: relative;
-  z-index: 1; /* ensure cards are below floating buttons */
+  z-index: 1; /* title and items - bottom layer */
 }
 
 .card-header {
@@ -131,7 +131,7 @@ h1 {
   justify-content: center;
   align-items: center;
   background-color: #28a745;
-  z-index: 1100; /* keep add button above everything */
+  z-index: 100; /* footer buttons - middle layer */
 }
 
 .add-btn:hover {
@@ -154,7 +154,7 @@ h1 {
   border: none;
   cursor: pointer;
   transition: background-color 0.2s;
-  z-index: 1100; /* keep history button above everything */
+  z-index: 100; /* footer buttons - middle layer */
 }
 
 .history-btn:hover {
@@ -172,7 +172,7 @@ h1 {
   display: flex;
   justify-content: center;
   align-items: center;
-  z-index: 999;
+  z-index: 1000; /* popups - top layer */
 }
 
 .modal-form {

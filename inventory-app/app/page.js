@@ -439,7 +439,7 @@ export default function Home() {
                   >
                     <h2>השאלת פריט: {item.name}</h2>
                     <input
-                      placeholder="מי שואל"
+                      placeholder="מי לקח"
                       value={formInfo[item.id]?.borrower || ''}
                       onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], borrower: e.target.value } })}
                       required
@@ -456,7 +456,7 @@ export default function Home() {
                       onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], admin: e.target.value } })}
                       required
                     >
-                      <option value="">בחר משאיל</option>
+                      <option value="">בחר אדמין</option>
                       {admins.map((admin, idx) => (
                         <option key={idx} value={admin}>{admin}</option>
                       ))}
