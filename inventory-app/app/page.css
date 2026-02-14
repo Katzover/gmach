@@ -302,3 +302,35 @@ h1 {
   margin: 0.25rem 0;
   font-size: 1rem;
 }
+
+/* BORROWERS CHECKLIST FOR RETURNS */
+.borrowers-checklist {
+  margin-bottom: 1rem;
+  padding: 1rem;
+  background-color: #f0f8ff;
+  border-radius: 8px;
+  border: 1px solid #b3d9ff;
+}
+
+.borrower-option {
+  margin-bottom: 0.5rem;
+}
+
+.borrower-btn {
+  width: 100%;
+  padding: 0.75rem;
+  background-color: #e3f2fd;
+  border: 1px solid #90caf9;
+  border-radius: 6px;
+  color: #1976d2;
+  cursor: pointer;
+  font-size: 0.95rem;
+  text-align: right;
+  transition: all 0.2s;
+}
+
+.borrower-btn:hover {
+  background-color: #bbdefb;
+  border-color: #64b5f6;
+  transform: translateX(-5px);
+}

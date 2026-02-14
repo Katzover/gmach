@@ -29,6 +29,21 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState('loan') // loan / return
   const [returnBorrower, setReturnBorrower] = useState('')
   const [admins, setAdmins] = useState(['מיכל בארי', 'מרים וייס', 'שרי זהבי', 'נעה קצובר'])
+  
+  // MASS BORROWING - sticky form values
+  const [lastBorrower, setLastBorrower] = useState('')
+  const [lastAdmin, setLastAdmin] = useState('')
+  const [openBorrowers, setOpenBorrowers] = useState([])
+
+  // Load last borrower and admin from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('lastBorrowerInfo')
+    if (saved) {
+      const { borrower, admin } = JSON.parse(saved)
+      setLastBorrower(borrower || '')
+      setLastAdmin(admin || '')
+    }
+  }, [])
 
   function closeAllModals() {
     setShowAddModal(false)
@@ -46,11 +61,11 @@ export default function Home() {
         const res = await fetch('/api/items')
         const text = await res.text()
         const data = text ? JSON.parse(text) : []
-        if (data.error) setMessage(`Error loading items: ${data.error}`)
+        if (data.error) setMessage(`שגיאה בטעינת פריטים: ${data.error}`)
         else setItems(data)
       } catch (err) {
         console.error(err)
-        setMessage(`Error loading items: ${err.message}`)
+        setMessage(`שגיאה בטעינת פריטים: ${err.message}`)
       } finally {
         setLoadingItems(false)
       }
@@ -97,15 +112,15 @@ export default function Home() {
       const text = await res.text()
       const data = text ? JSON.parse(text) : {}
       if (res.ok && data.success) {
-        setMessage('Item added ✅')
+        setMessage('פריט נוסף ✅')
         setNewItem({ name: '', qty: '', image: null })
         setShowAddModal(false)
         const refreshed = await fetch('/api/items')
         setItems(await refreshed.json())
-      } else setMessage(`Failed to add item: ${data.error || 'Unknown error'} ❌`)
+      } else setMessage(`הוספת פריט נכשלה: ${data.error || 'שגיאה בלתי קבועה'} ❌`)
     } catch (err) {
       console.error(err)
-      setMessage(`Error adding item: ${err.message} ❌`)
+      setMessage(`שגיאה בהוספת פריט: ${err.message} ❌`)
     } finally {
       setLoadingAction(false)
     }
@@ -127,14 +142,14 @@ export default function Home() {
       const text = await res.text()
       const data = text ? JSON.parse(text) : {}
       if (res.ok && data.success) {
-        setMessage('Item updated ✅')
+        setMessage('פריט עודכן ✅')
         setShowEditModal(null)
         const refreshed = await fetch('/api/items')
         setItems(await refreshed.json())
-      } else setMessage(`Failed to edit item: ${data.error || 'Unknown error'} ❌`)
+      } else setMessage(`עריכת פריט נכשלה: ${data.error || 'שגיאה בלתי קבועה'} ❌`)
     } catch (err) {
       console.error(err)
-      setMessage(`Error editing item: ${err.message} ❌`)
+      setMessage(`שגיאה בעריכת פריט: ${err.message} ❌`)
     } finally {
       setLoadingAction(false)
     }
@@ -144,11 +159,11 @@ export default function Home() {
     const info = formInfo[item_id]
     const item = items.find(i => i.id === item_id)
     if (!info?.borrower || !info?.qty || !info?.admin) {
-      setMessage('Fill all fields to loan ❌')
+      setMessage('מלא את כל השדות כדי להשאיל ❌')
       return
     }
     if (info.qty > item.available_qty) {
-      setMessage(`Cannot loan more than available (${item.available_qty}) ❌`)
+      setMessage(`לא ניתן להשאיל יותר מהזמין (${item.available_qty}) ❌`)
       return
     }
 
@@ -167,15 +182,19 @@ export default function Home() {
       const text = await res.text()
       const data = text ? JSON.parse(text) : {}
       if (res.ok && data.success) {
-        setMessage(`Item loaned to ${info.borrower} ✅`)
+        setMessage(`פריט הושאל ל${info.borrower} ✅`)
+        // Save borrower and admin for next loan
+        setLastBorrower(info.borrower)
+        setLastAdmin(info.admin)
+        localStorage.setItem('lastBorrowerInfo', JSON.stringify({ borrower: info.borrower, admin: info.admin }))
         setFormInfo({ ...formInfo, [item_id]: {} })
         setShowLoanModal(null)
         const refreshed = await fetch('/api/items')
         setItems(await refreshed.json())
-      } else setMessage(`Failed to loan: ${data.error || 'Unknown error'} ❌`)
+      } else setMessage(`השאלת פריט נכשלה: ${data.error || 'שגיאה בלתי קבועה'} ❌`)
     } catch (err) {
       console.error(err)
-      setMessage(`Error loaning item: ${err.message} ❌`)
+      setMessage(`שגיאה בהשאלת פריט: ${err.message} ❌`)
     } finally {
       setLoadingAction(false)
     }
@@ -184,7 +203,7 @@ export default function Home() {
   async function handleReturn(item_id) {
     const info = formInfo[item_id]
     if (!info?.returner || !info?.returnQty) {
-      setMessage('Fill all fields to return ❌')
+      setMessage('מלא את כל השדות כדי להחזיר ❌')
       return
     }
 
@@ -198,15 +217,15 @@ export default function Home() {
       const text = await res.text()
       const data = text ? JSON.parse(text) : {}
       if (res.ok && data.success) {
-        setMessage(`Item returned by ${info.returner} ✅`)
+        setMessage(`פריט הוחזר על ידי ${info.returner} ✅`)
         setFormInfo({ ...formInfo, [item_id]: {} })
         setShowReturnModal(null)
         const refreshed = await fetch('/api/items')
         setItems(await refreshed.json())
-      } else setMessage(`Failed to return: ${data.error || 'Unknown error'} ❌`)
+      } else setMessage(`החזרת פריט נכשלה: ${data.error || 'שגיאה בלתי קבועה'} ❌`)
     } catch (err) {
       console.error(err)
-      setMessage(`Error returning item: ${err.message} ❌`)
+      setMessage(`שגיאה בהחזרת פריט: ${err.message} ❌`)
     } finally {
       setLoadingAction(false)
     }
@@ -225,7 +244,7 @@ export default function Home() {
       setShowInfoModal(item_id)
     } catch (err) {
       console.error(err)
-      setMessage(`Error fetching loan history: ${err.message}`)
+      setMessage(`שגיאה בטעינת היסטוריית השאלות: ${err.message}`)
     } finally {
       setLoadingHistory(false)
     }
@@ -241,7 +260,7 @@ export default function Home() {
       setShowGlobalHistory(true)
     } catch (err) {
       console.error(err)
-      setMessage(`Error fetching loans: ${err.message}`)
+      setMessage(`שגיאה בטעינת ההשאלות: ${err.message}`)
     } finally {
       setLoadingHistory(false)
     }
@@ -342,12 +361,70 @@ export default function Home() {
     return diffDays > days
   }
 
-  // NEW: opens return modal + fills borrower name
-  function openReturnFor(item_id, borrower) {
-    setReturnBorrower(borrower)
-    setActiveTab('return')
+  // Select borrower from checklist and update form
+  function selectOpenBorrower(borrowerName, qty) {
+    setFormInfo(prev => ({ ...prev, [showReturnModal]: { returner: borrowerName, returnQty: String(qty) } }))
+  }
+
+  // Get open borrowers for an item (borrowed but not returned everything)
+  function getOpenBorrowers(item_id) {
+    const itemLoans = loanHistory.filter(loan => loan.item_id === item_id)
+    const borrowers = {}
+    
+    itemLoans.forEach(loan => {
+      const outstanding = loan.quantity - (loan.returned_qty || 0)
+      if (outstanding > 0) {
+        if (!borrowers[loan.borrower]) {
+          borrowers[loan.borrower] = outstanding
+        } else {
+          borrowers[loan.borrower] += outstanding
+        }
+      }
+    })
+    
+    return Object.entries(borrowers).map(([name, qty]) => ({ name, qty }))
+  }
+
+  // Open return modal and fetch open borrowers
+  async function openReturnModal(item_id) {
     setShowReturnModal(item_id)
-    setShowInfoModal(null)
+    setFormInfo(prev => ({ ...prev, [item_id]: { returner: '', returnQty: '' } }))
+    setLoadingHistory(true)
+    try {
+      const res = await fetch(`/api/loans/${item_id}`)
+      const text = await res.text()
+      const data = text ? JSON.parse(text) : []
+      const loans = Array.isArray(data) ? data : (data.loans || [])
+      setLoanHistory(loans)
+      
+      // Calculate open borrowers
+      const itemLoans = loans.filter(loan => loan.item_id === item_id)
+      const borrowers = {}
+      itemLoans.forEach(loan => {
+        const outstanding = loan.quantity - (loan.returned_qty || 0)
+        if (outstanding > 0) {
+          if (!borrowers[loan.borrower]) {
+            borrowers[loan.borrower] = outstanding
+          } else {
+            borrowers[loan.borrower] += outstanding
+          }
+        }
+      })
+      setOpenBorrowers(Object.entries(borrowers).map(([name, qty]) => ({ name, qty })))
+    } catch (err) {
+      console.error(err)
+      setMessage(`שגיאה בטעינת המשאילים: ${err.message}`)
+    } finally {
+      setLoadingHistory(false)
+    }
+  }
+
+  // Clear saved borrower info
+  function clearBorrowerInfo() {
+    setLastBorrower('')
+    setLastAdmin('')
+    localStorage.removeItem('lastBorrowerInfo')
+    setMessage('סגרת משאיל קודם ✅')
   }
 
   return (
@@ -416,7 +493,18 @@ export default function Home() {
 
               <button
                 disabled={item.available_qty <= 0 || loadingAction}
-                onClick={() => setShowLoanModal(item.id)}
+                onClick={() => {
+                  // Initialize form data with last borrower/admin if available
+                  setFormInfo(prev => ({
+                    ...prev,
+                    [item.id]: {
+                      borrower: lastBorrower || '',
+                      qty: '',
+                      admin: lastAdmin || ''
+                    }
+                  }))
+                  setShowLoanModal(item.id)
+                }}
               >
                 {loadingAction ? 'טוען...' : 'השאלה'}
               </button>
@@ -424,7 +512,7 @@ export default function Home() {
               {item.available_qty < item.total_qty && (
                 <button
                   disabled={loadingAction}
-                  onClick={() => setShowReturnModal(item.id)}
+                  onClick={() => openReturnModal(item.id)}
                 >
                   {loadingAction ? 'טוען...' : 'החזרה'}
                 </button>
@@ -481,9 +569,27 @@ export default function Home() {
                     onSubmit={e => { e.preventDefault(); handleReturn(item.id) }}
                   >
                     <h2>החזרת פריט: {item.name}</h2>
+                    
+                    {openBorrowers.length > 0 && (
+                      <div className="borrowers-checklist">
+                        <p style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>בחר משאיל:</p>
+                        {openBorrowers.map((borrower, idx) => (
+                          <div key={idx} className="borrower-option">
+                            <button
+                              type="button"
+                              className="borrower-btn"
+                              onClick={() => selectOpenBorrower(borrower.name, borrower.qty)}
+                            >
+                              {borrower.name} ({borrower.qty} בהשאלה)
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
                     <input
                       placeholder="מי מחזיר"
-                      value={formInfo[item.id]?.returner || returnBorrower}
+                      value={formInfo[item.id]?.returner || ''}
                       onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], returner: e.target.value } })}
                       required
                     />
