@@ -33,6 +33,16 @@ export default function Home() {
   // MASS BORROWING - sticky form values stored in localStorage
   // (loaded into formInfo when opening loan modal)
   const [openBorrowers, setOpenBorrowers] = useState([])
+  
+  // MASS MODE - for bulk operations
+  const [showMassMode, setShowMassMode] = useState(false)
+  const [massMode, setMassMode] = useState(null) // 'take' or 'return'
+  const [massSelection, setMassSelection] = useState({}) // { item_id: qty }
+  const [massBorrower, setMassBorrower] = useState('')
+  const [massAdmin, setMassAdmin] = useState('')
+  const [massReturner, setMassReturner] = useState('')
+  const [massReturnBorrower, setMassReturnBorrower] = useState('')
+  const [massReturnQty, setMassReturnQty] = useState({})
 
   function closeAllModals() {
     setShowAddModal(false)
@@ -41,6 +51,9 @@ export default function Home() {
     setShowEditModal(null)
     setShowInfoModal(null)
     setShowGlobalHistory(false)
+    setShowMassMode(false)
+    setMassMode(null)
+    setMassSelection({})
   }
 
   useEffect(() => {
@@ -424,6 +437,122 @@ export default function Home() {
     localStorage.setItem('lastBorrowerInfo', JSON.stringify({ borrower, admin }))
   }
 
+  // MASS MODE - Process all selected loans
+  async function processMassLoans() {
+    if (!massBorrower || !massAdmin || Object.keys(massSelection).length === 0) {
+      setMessage('בחר משאיל, אדמין ופריטים לפחות \u274c')
+      return
+    }
+
+    setLoadingAction(true)
+    try {
+      const selectedItems = Object.entries(massSelection)
+        .filter(([_, qty]) => qty > 0)
+        .map(([item_id, qty]) => ({ item_id, quantity: parseInt(qty) }))
+
+      for (const { item_id, quantity } of selectedItems) {
+        const res = await fetch('/api/loans', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            item_id,
+            borrower: massBorrower,
+            quantity,
+            admin: massAdmin
+          })
+        })
+        const data = await res.json()
+        if (!res.ok || !data.success) {
+          throw new Error(`\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05e4\u05e8\u05d9\u05d8 ${items.find(i => i.id === item_id)?.name}: ${data.error}`)
+        }
+      }
+
+      setMessage(`${selectedItems.length} \u05e4\u05e8\u05d9\u05d8\u05d9\u05dd \u05d4\u05d5\u05e9\u05d0\u05dc\u05d5 \u05dc${massBorrower} \u2705`)
+      saveBorrowerInfo(massBorrower, massAdmin)
+      
+      // Reset
+      setShowMassMode(false)
+      setMassMode(null)
+      setMassSelection({})
+      setMassBorrower('')
+      setMassAdmin('')
+      
+      // Refresh items
+      const refreshed = await fetch('/api/items')
+      setItems(await refreshed.json())
+    } catch (err) {
+      console.error(err)
+      setMessage(`\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05d4\u05e9\u05d0\u05dc\u05d4: ${err.message} \u274c`)
+    } finally {
+      setLoadingAction(false)
+    }
+  }
+
+  // MASS MODE - Process all selected returns
+  async function processMassReturns() {
+    if (!massReturnBorrower || Object.keys(massReturnQty).length === 0 || Object.values(massReturnQty).every(v => v <= 0)) {
+      setMessage('\u05d1\u05d7\u05e8 \u05de\u05e9\u05d0\u05d9\u05dc \u05d5\u05e4\u05e8\u05d9\u05d8\u05d9\u05dd \u05d1\u05db\u05de\u05d5\u05d9\u05d5\u05ea \u274c')
+      return
+    }
+
+    setLoadingAction(true)
+    try {
+      const selectedItems = Object.entries(massReturnQty)
+        .filter(([_, qty]) => qty > 0)
+        .map(([item_id, qty]) => ({ item_id, quantity: parseInt(qty) }))
+
+      for (const { item_id, quantity } of selectedItems) {
+        const res = await fetch('/api/return', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            item_id,
+            returner: massReturnBorrower,
+            quantity
+          })
+        })
+        const data = await res.json()
+        if (!res.ok || !data.success) {
+          throw new Error(`\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05d4\u05d7\u05d6\u05e8\u05d4 ${items.find(i => i.id === item_id)?.name}: ${data.error}`)
+        }
+      }
+
+      setMessage(`${selectedItems.length} \u05e4\u05e8\u05d9\u05d8\u05d9\u05dd \u05d4\u05d5\u05d7\u05d6\u05e8\u05d5 \u2705`)
+      
+      // Reset
+      setShowMassMode(false)
+      setMassMode(null)
+      setMassSelection({})
+      setMassReturnBorrower('')
+      setMassReturnQty({})
+      
+      // Refresh items
+      const refreshed = await fetch('/api/items')
+      setItems(await refreshed.json())
+    } catch (err) {
+      console.error(err)
+      setMessage(`\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05d4\u05d7\u05d6\u05e8\u05d4: ${err.message} \u274c`)
+    } finally {
+      setLoadingAction(false)
+    }
+  }
+
+  // Open return mode and fetch all loans for borrower dropdown
+  async function openMassReturnMode() {
+    setMassMode('return')
+    setLoadingHistory(true)
+    try {
+      const res = await fetch('/api/loans/all')
+      const data = await res.json()
+      setAllLoans(data || [])
+    } catch (err) {
+      console.error('Error fetching loans:', err)
+      setMessage(`שגיאה בטעינת ההשאלות: ${err.message}`)
+    } finally {
+      setLoadingHistory(false)
+    }
+  }
+
   // Open loan modal with pre-filled last borrower/admin
   function openLoanModal(item_id) {
     const lastInfo = getLastBorrowerInfo()
@@ -444,6 +573,13 @@ export default function Home() {
 
       {message && <div className="message">{message}</div>}
 
+      {/* GLOBAL LOADING OVERLAY - shows spinner for any loading state */}
+      {(loadingItems || loadingAction || loadingHistory) && (
+        <div className="global-loading-overlay" aria-hidden>
+          <div className="spinner" />
+        </div>
+      )}
+
       {/* TOP BUTTONS */}
       <div className="top-buttons">
         <button
@@ -453,6 +589,15 @@ export default function Home() {
           disabled={loadingHistory}
         >
           {loadingHistory ? 'טוען...' : '📊'}
+        </button>
+
+        <button
+          className="history-btn"
+          onClick={() => setShowMassMode(true)}
+          title="מצב המוני"
+          style={{ bottom: '160px' }}
+        >
+          ⚡
         </button>
 
         <button
@@ -467,10 +612,8 @@ export default function Home() {
 
       {/* LOADING ITEMS */}
       {loadingItems ? (
-        <div className="loading-grid">
-          <div className="loading-card" />
-          <div className="loading-card" />
-          <div className="loading-card" />
+        <div className="loading-spinner">
+          <div className="spinner"></div>
         </div>
       ) : (
         <div className="grid">
@@ -808,6 +951,219 @@ export default function Home() {
           </div>
         )
       })()}
+
+      {/* MASS MODE */}
+      {showMassMode && !massMode && (
+        <div className="modal" onMouseDown={() => closeAllModals()}>
+          <div className="modal-form" onMouseDown={e => e.stopPropagation()}>
+            <h2>בחר מצב</h2>
+            <div className="modal-buttons" style={{ flexDirection: 'column', gap: '1rem' }}>
+              <button 
+                type="button"
+                onClick={() => {
+                  setMassMode('take')
+                  const lastInfo = getLastBorrowerInfo()
+                  setMassBorrower(lastInfo.borrower)
+                  setMassAdmin(lastInfo.admin)
+                }}
+                style={{ padding: '1rem', fontSize: '1.1rem' }}
+              >
+                📤 השאלה - קח פריטים
+              </button>
+              <button 
+                type="button"
+                onClick={openMassReturnMode}
+                style={{ padding: '1rem', fontSize: '1.1rem' }}
+              >
+                📥 החזרה - החזר פריטים
+              </button>
+              <button 
+                type="button"
+                onClick={() => closeAllModals()}
+                style={{ padding: '0.75rem', backgroundColor: '#ccc', color: '#333' }}
+              >
+                ביטול
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MASS TAKE MODE */}
+      {showMassMode && massMode === 'take' && (
+        <div className="modal" onMouseDown={() => closeAllModals()}>
+          <div className="modal-form" style={{ maxHeight: '90vh', overflowY: 'auto', maxWidth: '600px' }} onMouseDown={e => e.stopPropagation()}>
+            <h2>השאלה המונית</h2>
+            
+            <input
+              placeholder="מי לוקח"
+              value={massBorrower}
+              onChange={e => setMassBorrower(e.target.value)}
+              required
+            />
+            
+            <select
+              value={massAdmin}
+              onChange={e => setMassAdmin(e.target.value)}
+              required
+            >
+              <option value="">בחר משאיל</option>
+              {admins.map((admin, idx) => (
+                <option key={idx} value={admin}>{admin}</option>
+              ))}
+            </select>
+
+            <div style={{ marginTop: '1.5rem', marginBottom: '1rem' }}>
+              <p style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>בחר פריטים וכמויות:</p>
+              {items.filter(item => item.available_qty > 0).map(item => (
+                <div key={item.id} style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '0.5rem',
+                  padding: '0.5rem',
+                  marginBottom: '0.5rem',
+                  backgroundColor: '#f5f5f5',
+                  borderRadius: '6px'
+                }}>
+                  <img src={item.image_url} alt={item.name} style={{ width: '40px', height: '40px', objectFit: 'contain' }} />
+                  <div style={{ flex: 1 }}>
+                    <p style={{ margin: 0, fontSize: '0.9rem' }}>{item.name}</p>
+                    <p style={{ margin: 0, fontSize: '0.75rem', color: '#666' }}>זמין: {item.available_qty}</p>
+                  </div>
+                  <input
+                    type="number"
+                    min="0"
+                    max={item.available_qty}
+                    value={massSelection[item.id] || ''}
+                    onChange={e => {
+                      const val = e.target.value ? parseInt(e.target.value) : 0
+                      if (val >= 0) {
+                        setMassSelection(prev => ({
+                          ...prev,
+                          [item.id]: val
+                        }))
+                      }
+                    }}
+                    style={{ width: '60px', padding: '0.4rem' }}
+                    placeholder="0"
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="modal-buttons">
+              <button 
+                type="button" 
+                onClick={processMassLoans}
+                disabled={loadingAction || !massBorrower || !massAdmin}
+              >
+                {loadingAction ? 'טוען...' : '✅ בצע השאלה'}
+              </button>
+              <button 
+                type="button" 
+                onClick={() => {
+                  setMassMode(null)
+                  setMassSelection({})
+                }}
+              >
+                חזור
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MASS RETURN MODE */}
+      {showMassMode && massMode === 'return' && (
+        <div className="modal" onMouseDown={() => closeAllModals()}>
+          <div className="modal-form" style={{ maxHeight: '90vh', overflowY: 'auto', maxWidth: '600px' }} onMouseDown={e => e.stopPropagation()}>
+            <h2>החזרה המונית</h2>
+            
+            <select
+              value={massReturnBorrower}
+              onChange={e => setMassReturnBorrower(e.target.value)}
+              required
+            >
+              <option value="">בחר משאיל</option>
+              {allLoans
+                .filter(loan => (loan.quantity - (loan.returned_qty || 0)) > 0)
+                .map(loan => loan.borrower)
+                .filter((v, i, a) => a.indexOf(v) === i)
+                .sort()
+                .map((borrower, idx) => (
+                  <option key={idx} value={borrower}>{borrower}</option>
+                ))}
+            </select>
+
+            <div style={{ marginTop: '1.5rem', marginBottom: '1rem' }}>
+              <p style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>בחר פריטים וכמויות:</p>
+              {items.map(item => {
+                const borrowed = allLoans.filter(
+                  loan => loan.item_id === item.id && 
+                  loan.borrower === massReturnBorrower && 
+                  (loan.quantity - (loan.returned_qty || 0)) > 0
+                ).reduce((sum, loan) => sum + (loan.quantity - (loan.returned_qty || 0)), 0)
+                
+                if (borrowed <= 0) return null
+                
+                return (
+                  <div key={item.id} style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '0.5rem',
+                    padding: '0.5rem',
+                    marginBottom: '0.5rem',
+                    backgroundColor: '#f0f0f0',
+                    borderRadius: '6px'
+                  }}>
+                    <img src={item.image_url} alt={item.name} style={{ width: '40px', height: '40px', objectFit: 'contain' }} />
+                    <div style={{ flex: 1 }}>
+                      <p style={{ margin: 0, fontSize: '0.9rem' }}>{item.name}</p>
+                      <p style={{ margin: 0, fontSize: '0.75rem', color: '#666' }}>בהשאלה: {borrowed}</p>
+                    </div>
+                    <input
+                      type="number"
+                      min="0"
+                      max={borrowed}
+                      value={massReturnQty[item.id] || ''}
+                      onChange={e => {
+                        const val = e.target.value ? parseInt(e.target.value) : 0
+                        if (val >= 0) {
+                          setMassReturnQty(prev => ({
+                            ...prev,
+                            [item.id]: val
+                          }))
+                        }
+                      }}
+                      style={{ width: '60px', padding: '0.4rem' }}
+                      placeholder="0"
+                    />
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="modal-buttons">
+              <button 
+                type="button" 
+                onClick={processMassReturns}
+                disabled={loadingAction || !massReturnBorrower}
+              >
+                {loadingAction ? 'טוען...' : '✅ בצע החזרה'}
+              </button>
+              <button 
+                type="button" 
+                onClick={() => {
+                  setMassMode(null)
+                  setMassReturnQty({})
+                }}
+              >
+                חזור
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </main>
   )
