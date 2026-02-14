@@ -456,7 +456,7 @@ export default function Home() {
                       onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], admin: e.target.value } })}
                       required
                     >
-                      <option value="">בחר אדמין</option>
+                      <option value="">בחר משאיל</option>
                       {admins.map((admin, idx) => (
                         <option key={idx} value={admin}>{admin}</option>
                       ))}

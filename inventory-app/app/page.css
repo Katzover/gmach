@@ -44,8 +44,6 @@ h1 {
   display: flex;
   flex-direction: column;
   align-items: center;
-  position: relative;
-  z-index: 1; /* title and items - bottom layer */
 }
 
 .card-header {
@@ -193,13 +191,19 @@ h1 {
   text-align: center;
 }
 
-.modal-form input {
+.modal-form input,
+.modal-form select {
   margin: 0.5rem 0;
   padding: 0.7rem;
   border-radius: 8px;
   border: 1px solid #ccc;
   color: #111;
   font-size: 1rem;
+}
+
+.modal-form select {
+  background-color: #fff;
+  cursor: pointer;
 }
 
 .modal-buttons {
