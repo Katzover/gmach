@@ -28,6 +28,7 @@ export default function Home() {
   // NEW STATES
   const [activeTab, setActiveTab] = useState('loan') // loan / return
   const [returnBorrower, setReturnBorrower] = useState('')
+  const [admins, setAdmins] = useState(['מיכל בארי', 'מרים וייס', 'שרי זהבי', 'נעה קצובר'])
 
   function closeAllModals() {
     setShowAddModal(false)
@@ -142,7 +143,7 @@ export default function Home() {
   async function handleLoan(item_id) {
     const info = formInfo[item_id]
     const item = items.find(i => i.id === item_id)
-    if (!info?.borrower || !info?.qty) {
+    if (!info?.borrower || !info?.qty || !info?.admin) {
       setMessage('Fill all fields to loan ❌')
       return
     }
@@ -156,7 +157,12 @@ export default function Home() {
       const res = await fetch('/api/loans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item_id, borrower: info.borrower, quantity: Number(info.qty) })
+        body: JSON.stringify({ 
+          item_id, 
+          borrower: info.borrower, 
+          quantity: Number(info.qty),
+          admin: info.admin
+        })
       })
       const text = await res.text()
       const data = text ? JSON.parse(text) : {}
@@ -341,7 +347,7 @@ export default function Home() {
     setReturnBorrower(borrower)
     setActiveTab('return')
     setShowReturnModal(item_id)
-    setShowInfoModal(null) // <-- THIS LINE FIXES THE ISSUE
+    setShowInfoModal(null)
   }
 
   return (
@@ -433,7 +439,7 @@ export default function Home() {
                   >
                     <h2>השאלת פריט: {item.name}</h2>
                     <input
-                      placeholder="מי לקח"
+                      placeholder="מי שואל"
                       value={formInfo[item.id]?.borrower || ''}
                       onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], borrower: e.target.value } })}
                       required
@@ -445,6 +451,16 @@ export default function Home() {
                       onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], qty: e.target.value } })}
                       required
                     />
+                    <select
+                      value={formInfo[item.id]?.admin || ''}
+                      onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], admin: e.target.value } })}
+                      required
+                    >
+                      <option value="">בחר משאיל</option>
+                      {admins.map((admin, idx) => (
+                        <option key={idx} value={admin}>{admin}</option>
+                      ))}
+                    </select>
                     <div className="modal-buttons">
                       <button type="submit" disabled={loadingAction}>
                         {loadingAction ? 'טוען...' : 'השאלה'}
@@ -571,6 +587,7 @@ export default function Home() {
                                   <p><strong>שם המשאיל:</strong> {loan.borrower}</p>
                                   <p><strong>כמות:</strong> {loan.quantity}</p>
                                   <p><strong>תאריך:</strong> {new Date(loan.date_taken).toLocaleDateString('he-IL')}</p>
+                                  {loan.admin && <p><strong>אדמין:</strong> {loan.admin}</p>}
                                   <p><strong>החזור:</strong> {loan.returned_qty || 0} / {loan.quantity}</p>
                                   {overdue && <p className="overdue">⚠️ overdue (יותר מ-14 ימים)</p>}
                                 </div>
