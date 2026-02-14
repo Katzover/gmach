@@ -30,20 +30,9 @@ export default function Home() {
   const [returnBorrower, setReturnBorrower] = useState('')
   const [admins, setAdmins] = useState(['מיכל בארי', 'מרים וייס', 'שרי זהבי', 'נעה קצובר'])
   
-  // MASS BORROWING - sticky form values
-  const [lastBorrower, setLastBorrower] = useState('')
-  const [lastAdmin, setLastAdmin] = useState('')
+  // MASS BORROWING - sticky form values stored in localStorage
+  // (loaded into formInfo when opening loan modal)
   const [openBorrowers, setOpenBorrowers] = useState([])
-
-  // Load last borrower and admin from localStorage on mount
-  useEffect(() => {
-    const saved = localStorage.getItem('lastBorrowerInfo')
-    if (saved) {
-      const { borrower, admin } = JSON.parse(saved)
-      setLastBorrower(borrower || '')
-      setLastAdmin(admin || '')
-    }
-  }, [])
 
   function closeAllModals() {
     setShowAddModal(false)
@@ -184,9 +173,7 @@ export default function Home() {
       if (res.ok && data.success) {
         setMessage(`פריט הושאל ל${info.borrower} ✅`)
         // Save borrower and admin for next loan
-        setLastBorrower(info.borrower)
-        setLastAdmin(info.admin)
-        localStorage.setItem('lastBorrowerInfo', JSON.stringify({ borrower: info.borrower, admin: info.admin }))
+        saveBorrowerInfo(info.borrower, info.admin)
         setFormInfo({ ...formInfo, [item_id]: {} })
         setShowLoanModal(null)
         const refreshed = await fetch('/api/items')
@@ -419,12 +406,36 @@ export default function Home() {
     }
   }
 
-  // Clear saved borrower info
-  function clearBorrowerInfo() {
-    setLastBorrower('')
-    setLastAdmin('')
-    localStorage.removeItem('lastBorrowerInfo')
-    setMessage('סגרת משאיל קודם ✅')
+  // Helper: get last borrower info from localStorage
+  function getLastBorrowerInfo() {
+    try {
+      const saved = localStorage.getItem('lastBorrowerInfo')
+      if (saved) {
+        return JSON.parse(saved)
+      }
+    } catch (e) {
+      console.error('Error loading borrower info:', e)
+    }
+    return { borrower: '', admin: '' }
+  }
+
+  // Helper: save borrower info to localStorage
+  function saveBorrowerInfo(borrower, admin) {
+    localStorage.setItem('lastBorrowerInfo', JSON.stringify({ borrower, admin }))
+  }
+
+  // Open loan modal with pre-filled last borrower/admin
+  function openLoanModal(item_id) {
+    const lastInfo = getLastBorrowerInfo()
+    setFormInfo(prev => ({
+      ...prev,
+      [item_id]: {
+        borrower: lastInfo.borrower,
+        qty: '',
+        admin: lastInfo.admin
+      }
+    }))
+    setShowLoanModal(item_id)
   }
 
   return (
@@ -493,18 +504,7 @@ export default function Home() {
 
               <button
                 disabled={item.available_qty <= 0 || loadingAction}
-                onClick={() => {
-                  // Initialize form data with last borrower/admin if available
-                  setFormInfo(prev => ({
-                    ...prev,
-                    [item.id]: {
-                      borrower: lastBorrower || '',
-                      qty: '',
-                      admin: lastAdmin || ''
-                    }
-                  }))
-                  setShowLoanModal(item.id)
-                }}
+                onClick={() => openLoanModal(item.id)}
               >
                 {loadingAction ? 'טוען...' : 'השאלה'}
               </button>
