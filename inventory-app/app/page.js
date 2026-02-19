@@ -48,6 +48,11 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState('')
   const [massSearchQuery, setMassSearchQuery] = useState('')
 
+  // SHARE STATES
+  const [showShareModal, setShowShareModal] = useState(false)
+  const [selectedShareBorrower, setSelectedShareBorrower] = useState('')
+  const [sharePhoneNumber, setSharePhoneNumber] = useState('')
+
   function closeAllModals() {
     setShowAddModal(false)
     setShowLoanModal(null)
@@ -59,6 +64,9 @@ export default function Home() {
     setMassMode(null)
     setMassSelection({})
     setMassSearchQuery('')
+    setShowShareModal(false)
+    setSelectedShareBorrower('')
+    setSharePhoneNumber('')
   }
 
   useEffect(() => {
@@ -572,6 +580,54 @@ export default function Home() {
     setShowLoanModal(item_id)
   }
 
+  // Handle share button - send WhatsApp message
+  function handleShare() {
+    if (!selectedShareBorrower) {
+      setMessage('אנא בחר משאיל')
+      return
+    }
+    if (!sharePhoneNumber.trim()) {
+      setMessage('אנא הכנס מספר טלפון')
+      return
+    }
+
+    // Get all items borrowed by this borrower that haven't been fully returned
+    const borrowerLoans = allLoans.filter(
+      loan => loan.borrower === selectedShareBorrower && 
+      (loan.quantity - (loan.returned_qty || 0)) > 0
+    )
+
+    if (borrowerLoans.length === 0) {
+      setMessage('אין פריטים בהשאלה לאדם זה')
+      return
+    }
+
+    // Build the WhatsApp message
+    const itemsList = borrowerLoans
+      .map(loan => {
+        const item = items.find(i => i.id === loan.item_id)
+        const remaining = loan.quantity - (loan.returned_qty || 0)
+        return `• ${item?.name || 'פריט'}: ${remaining} יח׳`
+      })
+      .join('\n')
+
+    const messageText = `שלום,\n\nפה רשימת הפריטים שנמצאים בהשאלה של ${selectedShareBorrower}:\n\n${itemsList}\n\nבתודה, גמ"ח`
+
+    // Clean phone number (remove spaces, dashes, etc.)
+    const cleanPhone = sharePhoneNumber.replace(/[^0-9+]/g, '')
+    const formattedPhone = cleanPhone.startsWith('+') ? cleanPhone : `+972${cleanPhone.replace(/^0/, '')}`
+
+    // Create WhatsApp link
+    const whatsappUrl = `https://wa.me/${formattedPhone.replace('+', '')}?text=${encodeURIComponent(messageText)}`
+
+    // Open the link
+    window.open(whatsappUrl, '_blank')
+    
+    // Reset and close modal
+    closeAllModals()
+    setMessage('הודעה נשלחה ל-WhatsApp')
+  }
+
   return (
     <main>
       <h1>גמ"ח – ניהול מלאי</h1>
@@ -603,6 +659,18 @@ export default function Home() {
           style={{ bottom: '160px' }}
         >
           ⚡
+        </button>
+
+        <button
+          className="history-btn"
+          onClick={() => {
+            setShowShareModal(true)
+            fetchAllLoans()
+          }}
+          title="שלח דרך WhatsApp"
+          style={{ bottom: '230px' }}
+        >
+          💬
         </button>
 
         <button
@@ -1186,6 +1254,91 @@ export default function Home() {
                   setMassMode(null)
                   setMassReturnQty({})
                 }}
+              >
+                חזור
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SHARE VIA WHATSAPP */}
+      {showShareModal && !selectedShareBorrower && (
+        <div className="modal" onMouseDown={() => closeAllModals()}>
+          <div className="modal-form" style={{ maxHeight: '90vh', overflowY: 'auto', maxWidth: '600px' }} onMouseDown={e => e.stopPropagation()}>
+            <h2>שלח דרך WhatsApp</h2>
+            <p style={{ marginBottom: '1rem', color: '#666' }}>בחר משאיל לשליחת רשימת הפריטים בהשאלה</p>
+            
+            {(() => {
+              const uniqueBorrowers = allLoans
+                .filter(loan => (loan.quantity - (loan.returned_qty || 0)) > 0)
+                .map(loan => loan.borrower)
+                .filter((v, i, a) => a.indexOf(v) === i)
+                .sort()
+
+              return uniqueBorrowers.length === 0 ? (
+                <p>אין משאילים כרגע</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {uniqueBorrowers.map((borrower, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setSelectedShareBorrower(borrower)}
+                      style={{
+                        padding: '0.75rem',
+                        backgroundColor: '#e3f2fd',
+                        border: '1px solid #90caf9',
+                        borderRadius: '6px',
+                        color: '#1976d2',
+                        cursor: 'pointer',
+                        fontSize: '1rem',
+                        textAlign: 'right',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      {borrower}
+                    </button>
+                  ))}
+                </div>
+              )
+            })()}
+
+            <div className="modal-buttons">
+              <button type="button" onClick={() => closeAllModals()}>סגור</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SHARE - ENTER PHONE NUMBER */}
+      {showShareModal && selectedShareBorrower && (
+        <div className="modal" onMouseDown={() => closeAllModals()}>
+          <div className="modal-form" onMouseDown={e => e.stopPropagation()}>
+            <h2>שלח ל-{selectedShareBorrower}</h2>
+            <p style={{ marginBottom: '1rem', color: '#666' }}>הכנס מספר טלפון (באפליקציית WhatsApp)</p>
+            
+            <input
+              type="tel"
+              placeholder="0501234567 או +972501234567"
+              value={sharePhoneNumber}
+              onChange={e => setSharePhoneNumber(e.target.value)}
+              onKeyPress={e => e.key === 'Enter' && handleShare()}
+              autoFocus
+              style={{ marginBottom: '1rem' }}
+            />
+
+            <div className="modal-buttons">
+              <button 
+                type="button" 
+                onClick={handleShare}
+                style={{ backgroundColor: '#25d366', color: '#fff' }}
+              >
+                ✓ שלח ב-WhatsApp
+              </button>
+              <button 
+                type="button" 
+                onClick={() => setSelectedShareBorrower('')}
               >
                 חזור
               </button>
