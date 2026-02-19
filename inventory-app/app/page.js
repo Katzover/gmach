@@ -44,6 +44,10 @@ export default function Home() {
   const [massReturnBorrower, setMassReturnBorrower] = useState('')
   const [massReturnQty, setMassReturnQty] = useState({})
 
+  // SEARCH STATES
+  const [searchQuery, setSearchQuery] = useState('')
+  const [massSearchQuery, setMassSearchQuery] = useState('')
+
   function closeAllModals() {
     setShowAddModal(false)
     setShowLoanModal(null)
@@ -54,6 +58,7 @@ export default function Home() {
     setShowMassMode(false)
     setMassMode(null)
     setMassSelection({})
+    setMassSearchQuery('')
   }
 
   useEffect(() => {
@@ -616,8 +621,20 @@ export default function Home() {
           <div className="spinner"></div>
         </div>
       ) : (
-        <div className="grid">
-          {items.map(item => (
+        <>
+          <div className="search-bar">
+            <input
+              type="text"
+              placeholder="חיפוש פריטים..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="search-input"
+            />
+          </div>
+          <div className="grid">
+            {items
+              .filter(item => item.name.toLowerCase().includes(searchQuery.toLowerCase()))
+              .map(item => (
             <div key={item.id} className="card">
               <img src={item.image_url} alt={item.name} />
 
@@ -855,8 +872,9 @@ export default function Home() {
               )}
 
             </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        </>
       )}
 
       {showAddModal && (
@@ -1013,9 +1031,20 @@ export default function Home() {
               ))}
             </select>
 
+            <input
+              type="text"
+              placeholder="חיפוש פריטים..."
+              value={massSearchQuery}
+              onChange={e => setMassSearchQuery(e.target.value)}
+              className="search-input"
+              style={{ marginTop: '1rem' }}
+            />
+
             <div style={{ marginTop: '1.5rem', marginBottom: '1rem' }}>
               <p style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>בחר פריטים וכמויות:</p>
-              {items.filter(item => item.available_qty > 0).map(item => (
+              {items
+                .filter(item => item.available_qty > 0 && item.name.toLowerCase().includes(massSearchQuery.toLowerCase()))
+                .map(item => (
                 <div key={item.id} style={{ 
                   display: 'flex', 
                   alignItems: 'center', 

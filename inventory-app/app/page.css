@@ -17,6 +17,35 @@ h1 {
   font-size: 2rem;
 }
 
+/* SEARCH BAR */
+.search-bar {
+  margin-bottom: 1.5rem;
+  display: flex;
+  justify-content: center;
+}
+
+.search-input {
+  width: 100%;
+  max-width: 400px;
+  padding: 0.75rem 1rem;
+  border: 2px solid #007bff;
+  border-radius: 8px;
+  font-size: 1rem;
+  color: #111;
+  background-color: #fff;
+  transition: border-color 0.2s;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: #0056b3;
+  box-shadow: 0 0 8px rgba(0, 123, 255, 0.25);
+}
+
+.search-input::placeholder {
+  color: #999;
+}
+
 /* MESSAGE BANNER */
 .message {
   background-color: #fff3cd;
