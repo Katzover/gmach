@@ -671,7 +671,7 @@ export default function Home() {
           className="history-btn"
           onClick={() => setShowMassMode(true)}
           title="מצב המוני"
-          style={{ bottom: '160px' }}
+          style={{ bottom: '230px' }}
         >
           ⚡
         </button>
@@ -683,7 +683,7 @@ export default function Home() {
             fetchAllLoans()
           }}
           title="שלח דרך WhatsApp"
-          style={{ bottom: '230px' }}
+          style={{ bottom: '160px' }}
         >
           💬
         </button>
