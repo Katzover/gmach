@@ -53,6 +53,10 @@ export default function Home() {
   const [selectedShareBorrower, setSelectedShareBorrower] = useState('')
   const [sharePhoneNumber, setSharePhoneNumber] = useState('')
 
+  // PAYMENT STATES
+  const [paymentInfo, setPaymentInfo] = useState({}) // { item_id: { amount, paidAmount } }
+  const [massPayment, setMassPayment] = useState({}) // { item_id: amount }
+
   function closeAllModals() {
     setShowAddModal(false)
     setShowLoanModal(null)
@@ -67,6 +71,8 @@ export default function Home() {
     setShowShareModal(false)
     setSelectedShareBorrower('')
     setSharePhoneNumber('')
+    setPaymentInfo({})
+    setMassPayment({})
   }
 
   useEffect(() => {
@@ -191,7 +197,8 @@ export default function Home() {
           item_id, 
           borrower: info.borrower, 
           quantity: Number(info.qty),
-          admin: info.admin
+          admin: info.admin,
+          price: info.payment !== undefined && info.payment !== '' ? Number(info.payment) : -1
         })
       })
       const text = await res.text()
@@ -225,7 +232,12 @@ export default function Home() {
       const res = await fetch('/api/return', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item_id, returner: info.returner, quantity: Number(info.returnQty) })
+        body: JSON.stringify({ 
+          item_id, 
+          returner: info.returner, 
+          quantity: Number(info.returnQty),
+          price: info.paidAmount !== undefined && info.paidAmount !== '' ? Number(info.paidAmount) : -1
+        })
       })
       const text = await res.text()
       const data = text ? JSON.parse(text) : {}
@@ -471,7 +483,8 @@ export default function Home() {
             item_id,
             borrower: massBorrower,
             quantity,
-            admin: massAdmin
+            admin: massAdmin,
+            price: massPayment.amount !== undefined && massPayment.amount !== '' ? Number(massPayment.amount) : -1
           })
         })
         const data = await res.json()
@@ -521,7 +534,8 @@ export default function Home() {
           body: JSON.stringify({
             item_id,
             returner: massReturnBorrower,
-            quantity
+            quantity,
+            price: massPayment.paid !== undefined && massPayment.paid !== '' ? Number(massPayment.paid) : -1
           })
         })
         const data = await res.json()
@@ -611,7 +625,8 @@ export default function Home() {
       })
       .join('\n')
 
-    const messageText = `שלום,\n\nפה רשימת הפריטים שנמצאים בהשאלה של ${selectedShareBorrower}:\n\n${itemsList}\n\nבתודה, גמ"ח`
+    const messageText = `שלום ${selectedShareBorrower} זוהי הודעה אוטומטית\n\nלהלן רשימת הפריטים שלקחת מהגמ"ח:\n\n${itemsList}\n\nלתשומת לבכם!\n* אין לקיים פעילויות יצירה ישירות על המפות, אלא לפרוס ניילון.\n* הדלקת נרות רק על מרכז שולחן ולא ישירות על המפה. טפטופי חלב הורסים את המפות.\n* מפות יש לכבס ולייבש היטב היטב! מפות לחות מעלות עובש ומתקלקלות.\n\nשמחנו להיות חלק מהשמחה שלכם`;
+
 
     // Clean phone number (remove spaces, dashes, etc.)
     const cleanPhone = sharePhoneNumber.replace(/[^0-9+]/g, '')
@@ -777,6 +792,13 @@ export default function Home() {
                         <option key={idx} value={admin}>{admin}</option>
                       ))}
                     </select>
+                    <input
+                      type="number"
+                      step="0.01"
+                      placeholder="סכום (או -1 לחינם)"
+                      value={formInfo[item.id]?.payment || ''}
+                      onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], payment: e.target.value } })}
+                    />
                     <div className="modal-buttons">
                       <button type="submit" disabled={loadingAction}>
                         {loadingAction ? 'טוען...' : 'השאלה'}
@@ -828,6 +850,25 @@ export default function Home() {
                       onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], returnQty: e.target.value } })}
                       required
                     />
+                    <input
+                      type="number"
+                      step="0.01"
+                      placeholder="סכום ששולם (או -1 לחינם)"
+                      value={formInfo[item.id]?.paidAmount || ''}
+                      onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], paidAmount: e.target.value } })}
+                    />
+                    {(() => {
+                      const paidAmount = parseFloat(formInfo[item.id]?.paidAmount || 0)
+                      const requiredAmount = loanHistory.find(loan => loan.item_id === item.id && loan.borrower === formInfo[item.id]?.returner)?.payment || 0
+                      if (requiredAmount && requiredAmount !== -1 && paidAmount < requiredAmount) {
+                        return (
+                          <div className="warning-message">
+                            ⚠️ חובה: {requiredAmount} ש"ח | שולם: {paidAmount} ש"ח
+                          </div>
+                        )
+                      }
+                      return null
+                    })()}
                     <div className="modal-buttons">
                       <button type="submit" disabled={loadingAction}>
                         {loadingAction ? 'טוען...' : 'החזרה'}
@@ -1100,6 +1141,14 @@ export default function Home() {
             </select>
 
             <input
+              type="number"
+              step="0.01"
+              placeholder="סכום תשלום (או -1 לחינם)"
+              value={massPayment.amount || ''}
+              onChange={e => setMassPayment({ ...massPayment, amount: e.target.value })}
+            />
+
+            <input
               type="text"
               placeholder="חיפוש פריטים..."
               value={massSearchQuery}
@@ -1113,19 +1162,11 @@ export default function Home() {
               {items
                 .filter(item => item.available_qty > 0 && item.name.toLowerCase().includes(massSearchQuery.toLowerCase()))
                 .map(item => (
-                <div key={item.id} style={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '0.5rem',
-                  padding: '0.5rem',
-                  marginBottom: '0.5rem',
-                  backgroundColor: '#f5f5f5',
-                  borderRadius: '6px'
-                }}>
-                  <img src={item.image_url} alt={item.name} style={{ width: '40px', height: '40px', objectFit: 'contain' }} />
-                  <div style={{ flex: 1 }}>
-                    <p style={{ margin: 0, fontSize: '0.9rem' }}>{item.name}</p>
-                    <p style={{ margin: 0, fontSize: '0.75rem', color: '#666' }}>זמין: {item.available_qty}</p>
+                <div key={item.id} className="mass-item">
+                  <img src={item.image_url} alt={item.name} />
+                  <div className="mass-item-info">
+                    <p>{item.name}</p>
+                    <p className="available">זמין: {item.available_qty}</p>
                   </div>
                   <input
                     type="number"
@@ -1192,6 +1233,27 @@ export default function Home() {
                 ))}
             </select>
 
+            <input
+              type="number"
+              step="0.01"
+              placeholder="סכום ששולם (או -1 לחינם)"
+              value={massPayment.paid || ''}
+              onChange={e => setMassPayment({ ...massPayment, paid: e.target.value })}
+            />
+
+            {(() => {
+              const totalPaid = parseFloat(massPayment.paid || 0)
+              const totalRequired = parseFloat(massPayment.amount || 0)
+              if (totalRequired && totalRequired !== -1 && totalPaid < totalRequired) {
+                return (
+                  <div className="warning-message">
+                    ⚠️ חובה: {totalRequired} ש"ח | שולם: {totalPaid} ש"ח
+                  </div>
+                )
+              }
+              return null
+            })()}
+
             <div style={{ marginTop: '1.5rem', marginBottom: '1rem' }}>
               <p style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>בחר פריטים וכמויות:</p>
               {items.map(item => {
@@ -1204,19 +1266,11 @@ export default function Home() {
                 if (borrowed <= 0) return null
                 
                 return (
-                  <div key={item.id} style={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    gap: '0.5rem',
-                    padding: '0.5rem',
-                    marginBottom: '0.5rem',
-                    backgroundColor: '#f0f0f0',
-                    borderRadius: '6px'
-                  }}>
-                    <img src={item.image_url} alt={item.name} style={{ width: '40px', height: '40px', objectFit: 'contain' }} />
-                    <div style={{ flex: 1 }}>
-                      <p style={{ margin: 0, fontSize: '0.9rem' }}>{item.name}</p>
-                      <p style={{ margin: 0, fontSize: '0.75rem', color: '#666' }}>בהשאלה: {borrowed}</p>
+                  <div key={item.id} className="mass-item">
+                    <img src={item.image_url} alt={item.name} />
+                    <div className="mass-item-info">
+                      <p>{item.name}</p>
+                      <p className="available">בהשאלה: {borrowed}</p>
                     </div>
                     <input
                       type="number"
@@ -1232,7 +1286,6 @@ export default function Home() {
                           }))
                         }
                       }}
-                      style={{ width: '60px', padding: '0.4rem' }}
                       placeholder="0"
                     />
                   </div>

@@ -2,28 +2,35 @@ import { supabase } from '@/lib/supabaseServer'
 
 export async function POST(req) {
   try {
-    const { item_id, borrower, quantity } = await req.json()
+    const { item_id, borrower, quantity, price } = await req.json()
     if (!item_id || !borrower || !quantity) {
       return new Response(JSON.stringify({ error: 'Missing required fields' }), { status: 400 })
     }
 
-    // Insert loan
-    const { error } = await supabase.from('loans').insert({
-      item_id,
-      borrower,
-      quantity,
-      date_taken: new Date()
-    })
-
-    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 400 })
-
-    // Update available quantity
+    // Validate item exists
     const { data: itemData, error: itemError } = await supabase
       .from('items')
       .select('available_qty')
       .eq('id', item_id)
       .single()
-    if (itemError) return new Response(JSON.stringify({ error: itemError.message }), { status: 400 })
+    
+    if (itemError || !itemData) {
+      return new Response(JSON.stringify({ error: 'Item not found - index out of range' }), { status: 404 })
+    }
+
+    // Insert loan with price if provided
+    const loanData = {
+      item_id,
+      borrower,
+      quantity,
+      date_taken: new Date()
+    }
+    if (price !== undefined && price !== null) {
+      loanData.price = Number(price)
+    }
+
+    const { error } = await supabase.from('loans').insert(loanData)
+    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 400 })
 
     await supabase
       .from('items')

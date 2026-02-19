@@ -2,7 +2,7 @@ import { supabase } from '@/lib/supabaseServer'
 
 export async function POST(req) {
   try {
-    const { item_id, returner, quantity } = await req.json()
+    const { item_id, returner, quantity, price } = await req.json()
 
     // Fix: allow quantity = 0 (or check if missing)
     if (!item_id || !returner || quantity == null) {
@@ -12,6 +12,17 @@ export async function POST(req) {
     const qty = Number(quantity)
     if (isNaN(qty) || qty <= 0) {
       return new Response(JSON.stringify({ error: 'Quantity must be a positive number' }), { status: 400 })
+    }
+
+    // Validate item exists
+    const { data: validateItem, error: validateError } = await supabase
+      .from('items')
+      .select('id')
+      .eq('id', item_id)
+      .single()
+    
+    if (validateError || !validateItem) {
+      return new Response(JSON.stringify({ error: 'Item not found - index out of range' }), { status: 404 })
     }
 
     // 1️⃣ Get all loans for this borrower and item
@@ -34,9 +45,15 @@ export async function POST(req) {
       const availableToReturn = loan.quantity - (loan.returned_qty || 0)
       const returnNow = Math.min(availableToReturn, remaining)
 
+      // Update the loan with returned quantity and price if provided
+      const updateData = { returned_qty: (loan.returned_qty || 0) + returnNow }
+      if (price !== undefined && price !== null) {
+        updateData.price = Number(price)
+      }
+
       const { error: updateLoanError } = await supabase
         .from('loans')
-        .update({ returned_qty: (loan.returned_qty || 0) + returnNow })
+        .update(updateData)
         .eq('id', loan.id)
 
       if (updateLoanError) {
