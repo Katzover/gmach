@@ -645,7 +645,7 @@ export default function Home() {
 
   return (
     <main>
-      <h1>גמ"ח – ניהול מלאי</h1>
+      <h1>גמ"ח עיר דוד</h1>
 
       {message && <div className="message">{message}</div>}
 
