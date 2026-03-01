@@ -1,11 +1,16 @@
 'use client'
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import './page.css'
-
 
 export default function Home() {
   const [items, setItems] = useState([])
   const [message, setMessage] = useState('')
+  const messageTimerRef = React.useRef(null)
+  function showMessage(msg) {
+    setMessage(msg)
+    if (messageTimerRef.current) clearTimeout(messageTimerRef.current)
+    messageTimerRef.current = setTimeout(() => setMessage(''), 4000)
+  }
 
   const [showAddModal, setShowAddModal] = useState(false)
   const [showLoanModal, setShowLoanModal] = useState(null)
@@ -69,10 +74,10 @@ export default function Home() {
         const res = await fetch('/api/items')
         const text = await res.text()
         const data = text ? JSON.parse(text) : []
-        if (data.error) setMessage(`שגיאה בטעינת פריטים: ${data.error}`)
+        if (data.error) showMessage(`שגיאה בטעינת פריטים: ${data.error}`)
         else setItems(data)
       } catch (err) {
-        setMessage(`שגיאה בטעינת פריטים: ${err.message}`)
+        showMessage(`שגיאה בטעינת פריטים: ${err.message}`)
       } finally {
         setLoadingItems(false)
       }
@@ -81,18 +86,23 @@ export default function Home() {
   }, [])
 
   async function compressImage(file, maxWidth = 300, maxHeight = 300) {
-    return new Promise(resolve => {
+    return new Promise((resolve, reject) => {
       const img = new Image()
       const reader = new FileReader()
+      reader.onerror = () => reject(new Error('נכשלה קריאת הקובץ'))
       reader.onload = e => { img.src = e.target.result }
+      img.onerror = () => reject(new Error('נכשלה טעינת התמונה'))
       img.onload = () => {
         let width = img.width, height = img.height
         if (width > maxWidth) { height *= maxWidth / width; width = maxWidth }
         if (height > maxHeight) { width *= maxHeight / height; height = maxHeight }
         const canvas = document.createElement('canvas')
-        canvas.width = width; canvas.height = height
-        canvas.getContext('2d').drawImage(img, 0, 0, width, height)
-        canvas.toBlob(blob => resolve(blob), 'image/webp', 0.6)
+        canvas.width = Math.round(width); canvas.height = Math.round(height)
+        canvas.getContext('2d').drawImage(img, 0, 0, Math.round(width), Math.round(height))
+        canvas.toBlob(blob => {
+          if (blob) resolve(blob)
+          else reject(new Error('נכשלה דחיסת התמונה'))
+        }, 'image/webp', 0.6)
       }
       reader.readAsDataURL(file)
     })
@@ -100,7 +110,10 @@ export default function Home() {
 
   async function handleAddItem(e) {
     e.preventDefault()
-    if (!newItem.image) return
+    if (!newItem.image) { showMessage('יש לבחור תמונה ❌'); return }
+    if (!newItem.name.trim()) { showMessage('יש להזין שם פריט ❌'); return }
+    const addQty = Number(newItem.qty)
+    if (!addQty || addQty <= 0) { showMessage('כמות חייבת להיות גדולה מ-0 ❌'); return }
     setLoadingAction(true)
     try {
       const compressed = await compressImage(newItem.image)
@@ -111,19 +124,26 @@ export default function Home() {
       const res = await fetch('/api/items', { method: 'POST', body: formData })
       const data = await res.json()
       if (res.ok && data.success) {
-        setMessage('פריט נוסף ✅')
+        showMessage('פריט נוסף ✅')
         setNewItem({ name: '', qty: '', image: null })
         setShowAddModal(false)
         setItems(await (await fetch('/api/items')).json())
-      } else setMessage(`הוספת פריט נכשלה: ${data.error || 'שגיאה'} ❌`)
+      } else showMessage(`הוספת פריט נכשלה: ${data.error || 'שגיאה'} ❌`)
     } catch (err) {
-      setMessage(`שגיאה בהוספת פריט: ${err.message} ❌`)
+      showMessage(`שגיאה בהוספת פריט: ${err.message} ❌`)
     } finally {
       setLoadingAction(false)
     }
   }
 
   async function handleEditItem(item_id) {
+    const item = items.find(i => i.id === item_id)
+    const newTotalQty = Number(editItem.total_qty)
+    if (!newTotalQty || newTotalQty <= 0) { showMessage('כמות חייבת להיות גדולה מ-0 ❌'); return }
+    const currentlyLoaned = item ? (item.total_qty - item.available_qty) : 0
+    if (newTotalQty < currentlyLoaned) {
+      showMessage(`לא ניתן להגדיר כמות נמוכה מהמושאל כרגע (${currentlyLoaned}) ❌`); return
+    }
     setLoadingAction(true)
     try {
       const formData = new FormData()
@@ -137,12 +157,12 @@ export default function Home() {
       const res = await fetch('/api/items', { method: 'PUT', body: formData })
       const data = await res.json()
       if (res.ok && data.success) {
-        setMessage('פריט עודכן ✅')
+        showMessage('פריט עודכן ✅')
         setShowEditModal(null)
         setItems(await (await fetch('/api/items')).json())
-      } else setMessage(`עריכת פריט נכשלה: ${data.error || 'שגיאה'} ❌`)
+      } else showMessage(`עריכת פריט נכשלה: ${data.error || 'שגיאה'} ❌`)
     } catch (err) {
-      setMessage(`שגיאה בעריכת פריט: ${err.message} ❌`)
+      showMessage(`שגיאה בעריכת פריט: ${err.message} ❌`)
     } finally {
       setLoadingAction(false)
     }
@@ -151,25 +171,27 @@ export default function Home() {
   async function handleLoan(item_id) {
     const info = formInfo[item_id]
     const item = items.find(i => i.id === item_id)
-    if (!info?.borrower || !info?.qty || !info?.admin) { setMessage('מלא את כל השדות ❌'); return }
-    if (info.qty > item.available_qty) { setMessage(`לא ניתן להשאיל יותר מהזמין (${item.available_qty}) ❌`); return }
+    if (!info?.borrower || !info?.qty || !info?.admin) { showMessage('מלא את כל השדות ❌'); return }
+    const qty = Number(info.qty)
+    if (!qty || qty <= 0) { showMessage('כמות חייבת להיות גדולה מ-0 ❌'); return }
+    if (qty > item.available_qty) { showMessage(`לא ניתן להשאיל יותר מהזמין (${item.available_qty}) ❌`); return }
     setLoadingAction(true)
     try {
       const res = await fetch('/api/loans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item_id, borrower: info.borrower, quantity: Number(info.qty), admin: info.admin, price: info.payment !== undefined && info.payment !== '' ? Number(info.payment) : -1 })
+        body: JSON.stringify({ item_id, borrower: info.borrower, quantity: qty, admin: info.admin, price: info.payment !== undefined && info.payment !== '' ? Number(info.payment) : -1 })
       })
       const data = await res.json()
       if (res.ok && data.success) {
-        setMessage(`פריט הושאל ל${info.borrower} ✅`)
+        showMessage(`פריט הושאל ל${info.borrower} ✅`)
         saveBorrowerInfo(info.borrower, info.admin)
         setFormInfo({ ...formInfo, [item_id]: {} })
         setShowLoanModal(null)
         setItems(await (await fetch('/api/items')).json())
-      } else setMessage(`השאלת פריט נכשלה: ${data.error || 'שגיאה'} ❌`)
+      } else showMessage(`השאלת פריט נכשלה: ${data.error || 'שגיאה'} ❌`)
     } catch (err) {
-      setMessage(`שגיאה בהשאלת פריט: ${err.message} ❌`)
+      showMessage(`שגיאה בהשאלת פריט: ${err.message} ❌`)
     } finally {
       setLoadingAction(false)
     }
@@ -177,23 +199,32 @@ export default function Home() {
 
   async function handleReturn(item_id) {
     const info = formInfo[item_id]
-    if (!info?.returner || !info?.returnQty) { setMessage('מלא את כל השדות ❌'); return }
+    if (!info?.returner || !info?.returnQty) { showMessage('מלא את כל השדות ❌'); return }
+    const returnQty = Number(info.returnQty)
+    if (!returnQty || returnQty <= 0) { showMessage('כמות חייבת להיות גדולה מ-0 ❌'); return }
+    // check not returning more than outstanding
+    const outstanding = loanHistory
+      .filter(l => l.item_id === item_id && l.borrower === info.returner)
+      .reduce((s, l) => s + (l.quantity - (l.returned_qty || 0)), 0)
+    if (outstanding > 0 && returnQty > outstanding) {
+      showMessage(`לא ניתן להחזיר יותר מהמושאל (${outstanding}) ❌`); return
+    }
     setLoadingAction(true)
     try {
       const res = await fetch('/api/return', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item_id, returner: info.returner, quantity: Number(info.returnQty), price: info.paidAmount !== undefined && info.paidAmount !== '' ? Number(info.paidAmount) : -1 })
+        body: JSON.stringify({ item_id, returner: info.returner, quantity: returnQty, price: info.paidAmount !== undefined && info.paidAmount !== '' ? Number(info.paidAmount) : -1 })
       })
       const data = await res.json()
       if (res.ok && data.success) {
-        setMessage(`פריט הוחזר על ידי ${info.returner} ✅`)
+        showMessage(`פריט הוחזר על ידי ${info.returner} ✅`)
         setFormInfo({ ...formInfo, [item_id]: {} })
         setShowReturnModal(null)
         setItems(await (await fetch('/api/items')).json())
-      } else setMessage(`החזרת פריט נכשלה: ${data.error || 'שגיאה'} ❌`)
+      } else showMessage(`החזרת פריט נכשלה: ${data.error || 'שגיאה'} ❌`)
     } catch (err) {
-      setMessage(`שגיאה בהחזרת פריט: ${err.message} ❌`)
+      showMessage(`שגיאה בהחזרת פריט: ${err.message} ❌`)
     } finally {
       setLoadingAction(false)
     }
@@ -207,7 +238,7 @@ export default function Home() {
       setLoanHistory(Array.isArray(data) ? data : (data.loans || []))
       setShowInfoModal(item_id)
     } catch (err) {
-      setMessage(`שגיאה בטעינת היסטוריה: ${err.message}`)
+      showMessage(`שגיאה בטעינת היסטוריה: ${err.message}`)
     } finally {
       setLoadingHistory(false)
     }
@@ -221,7 +252,7 @@ export default function Home() {
       setAllLoans(data)
       setShowGlobalHistory(true)
     } catch (err) {
-      setMessage(`שגיאה בטעינת ההשאלות: ${err.message}`)
+      showMessage(`שגיאה בטעינת ההשאלות: ${err.message}`)
     } finally {
       setLoadingHistory(false)
     }
@@ -293,7 +324,7 @@ export default function Home() {
       })
       setOpenBorrowers(Object.entries(borrowers).map(([name, qty]) => ({ name, qty })))
     } catch (err) {
-      setMessage(`שגיאה בטעינת המשאילים: ${err.message}`)
+      showMessage(`שגיאה בטעינת המשאילים: ${err.message}`)
     } finally {
       setLoadingHistory(false)
     }
@@ -310,22 +341,31 @@ export default function Home() {
 
   async function processMassLoans() {
     if (!massBorrower || !massAdmin || Object.keys(massSelection).length === 0) {
-      setMessage('בחר משאיל, אדמין ופריטים לפחות ❌'); return
+      showMessage('בחר משאיל, אדמין ופריטים לפחות ❌'); return
     }
     setLoadingAction(true)
     try {
       const selectedItems = Object.entries(massSelection).filter(([, q]) => q > 0).map(([item_id, qty]) => ({ item_id, quantity: parseInt(qty) }))
+      // validate availability before sending anything
+      for (const { item_id, quantity } of selectedItems) {
+        const item = items.find(i => i.id === item_id)
+        if (quantity > item.available_qty) {
+          showMessage(`\${item.name}: מבוקש ${quantity} אך זמין רק ${item.available_qty} ❌`)
+          setLoadingAction(false)
+          return
+        }
+      }
       for (const { item_id, quantity } of selectedItems) {
         const res = await fetch('/api/loans', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id, borrower: massBorrower, quantity, admin: massAdmin, price: massPayment.amount !== undefined && massPayment.amount !== '' ? Number(massPayment.amount) : -1 }) })
         const data = await res.json()
         if (!res.ok || !data.success) throw new Error(`שגיאה בפריט ${items.find(i => i.id === item_id)?.name}: ${data.error}`)
       }
-      setMessage(`${selectedItems.length} פריטים הושאלו ל${massBorrower} ✅`)
+      showMessage(`${selectedItems.length} פריטים הושאלו ל${massBorrower} ✅`)
       saveBorrowerInfo(massBorrower, massAdmin)
       setShowMassMode(false); setMassMode(null); setMassSelection({}); setMassBorrower(''); setMassAdmin('')
       setItems(await (await fetch('/api/items')).json())
     } catch (err) {
-      setMessage(`שגיאה בהשאלה: ${err.message} ❌`)
+      showMessage(`שגיאה בהשאלה: ${err.message} ❌`)
     } finally {
       setLoadingAction(false)
     }
@@ -333,21 +373,33 @@ export default function Home() {
 
   async function processMassReturns() {
     if (!massReturnBorrower || Object.values(massReturnQty).every(v => v <= 0)) {
-      setMessage('בחר משאיל ופריטים בכמויות ❌'); return
+      showMessage('בחר משאיל ופריטים בכמויות ❌'); return
     }
     setLoadingAction(true)
     try {
       const selectedItems = Object.entries(massReturnQty).filter(([, q]) => q > 0).map(([item_id, qty]) => ({ item_id, quantity: parseInt(qty) }))
+      // validate return quantities before sending anything
+      for (const { item_id, quantity } of selectedItems) {
+        const borrowed = allLoans
+          .filter(l => l.item_id === item_id && l.borrower === massReturnBorrower && (l.quantity - (l.returned_qty || 0)) > 0)
+          .reduce((s, l) => s + (l.quantity - (l.returned_qty || 0)), 0)
+        if (quantity > borrowed) {
+          const item = items.find(i => i.id === item_id)
+          showMessage(`\${item?.name}: מבוקש להחזיר ${quantity} אך בהשאלה רק ${borrowed} ❌`)
+          setLoadingAction(false)
+          return
+        }
+      }
       for (const { item_id, quantity } of selectedItems) {
         const res = await fetch('/api/return', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id, returner: massReturnBorrower, quantity, price: massPayment.paid !== undefined && massPayment.paid !== '' ? Number(massPayment.paid) : -1 }) })
         const data = await res.json()
         if (!res.ok || !data.success) throw new Error(`שגיאה בהחזרה ${items.find(i => i.id === item_id)?.name}: ${data.error}`)
       }
-      setMessage(`${selectedItems.length} פריטים הוחזרו ✅`)
+      showMessage(`${selectedItems.length} פריטים הוחזרו ✅`)
       setShowMassMode(false); setMassMode(null); setMassSelection({}); setMassReturnBorrower(''); setMassReturnQty({})
       setItems(await (await fetch('/api/items')).json())
     } catch (err) {
-      setMessage(`שגיאה בהחזרה: ${err.message} ❌`)
+      showMessage(`שגיאה בהחזרה: ${err.message} ❌`)
     } finally {
       setLoadingAction(false)
     }
@@ -360,7 +412,7 @@ export default function Home() {
       const res = await fetch('/api/loans/all')
       setAllLoans(await res.json() || [])
     } catch (err) {
-      setMessage(`שגיאה בטעינת ההשאלות: ${err.message}`)
+      showMessage(`שגיאה בטעינת ההשאלות: ${err.message}`)
     } finally {
       setLoadingHistory(false)
     }
@@ -373,10 +425,10 @@ export default function Home() {
   }
 
   function handleShare() {
-    if (!selectedShareBorrower) { setMessage('אנא בחר משאיל'); return }
-    if (!sharePhoneNumber.trim()) { setMessage('אנא הכנס מספר טלפון'); return }
+    if (!selectedShareBorrower) { showMessage('אנא בחר משאיל'); return }
+    if (!sharePhoneNumber.trim()) { showMessage('אנא הכנס מספר טלפון'); return }
     const borrowerLoans = allLoans.filter(l => l.borrower === selectedShareBorrower && (l.quantity - (l.returned_qty || 0)) > 0)
-    if (borrowerLoans.length === 0) { setMessage('אין פריטים בהשאלה לאדם זה'); return }
+    if (borrowerLoans.length === 0) { showMessage('אין פריטים בהשאלה לאדם זה'); return }
     const itemsList = borrowerLoans.map(loan => {
       const item = items.find(i => i.id === loan.item_id)
       return `• ${item?.name || 'פריט'}: ${loan.quantity - (loan.returned_qty || 0)} יח׳`
@@ -386,7 +438,7 @@ export default function Home() {
     const formatted = clean.startsWith('+') ? clean : `+972${clean.replace(/^0/, '')}`
     window.open(`https://wa.me/${formatted.replace('+', '')}?text=${encodeURIComponent(messageText)}`, '_blank')
     closeAllModals()
-    setMessage('הודעה נשלחה ל-WhatsApp')
+    showMessage('הודעה נשלחה ל-WhatsApp')
   }
 
   return (
@@ -411,7 +463,7 @@ export default function Home() {
       </header>
 
       {/* ── MESSAGE ── */}
-      {message && <div className="message">{message}</div>}
+      {message && <div className="message" onClick={() => setMessage('')} style={{ cursor: 'pointer' }}>{message}</div>}
 
       {/* ── GLOBAL LOADING OVERLAY — one loader for all states ── */}
       {(loadingItems || loadingAction || loadingHistory) && (
@@ -889,6 +941,26 @@ export default function Home() {
           </div>
         </div>
       )}
+      {/* ── MOBILE BOTTOM TAB BAR ── */}
+      <nav className="mobile-tab-bar">
+        <button className="tab-btn" onClick={fetchAllLoans} disabled={loadingHistory}>
+          <span className="tab-icon">📊</span>
+          <span className="tab-label">סטטיסטיקה</span>
+        </button>
+        <button className="tab-btn" onClick={() => { setShowShareModal(true); fetchAllLoans() }}>
+          <span className="tab-icon">💬</span>
+          <span className="tab-label">שלח</span>
+        </button>
+        <button className="tab-btn tab-add" onClick={() => setShowAddModal(true)} disabled={loadingAction || loadingItems}>
+          <span className="tab-icon-wrap">＋</span>
+          <span className="tab-label">הוסף</span>
+        </button>
+        <button className="tab-btn" onClick={() => setShowMassMode(true)}>
+          <span className="tab-icon">⚡</span>
+          <span className="tab-label">המוני</span>
+        </button>
+      </nav>
+
     </main>
   )
 }
