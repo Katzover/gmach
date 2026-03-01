@@ -50,6 +50,10 @@ export default function Home() {
 
   const [massPayment, setMassPayment] = useState({})
 
+  const [globalStatsTab, setGlobalStatsTab] = useState('overview')
+  const [itemStatsTab, setItemStatsTab] = useState('overview')
+
+
   function closeAllModals() {
     setShowAddModal(false)
     setShowLoanModal(null)
@@ -65,6 +69,7 @@ export default function Home() {
     setSelectedShareBorrower('')
     setSharePhoneNumber('')
     setMassPayment({})
+    // reset which tab you were on when you reopen stats
   }
 
   useEffect(() => {
@@ -202,7 +207,6 @@ export default function Home() {
     if (!info?.returner || !info?.returnQty) { showMessage('מלא את כל השדות ❌'); return }
     const returnQty = Number(info.returnQty)
     if (!returnQty || returnQty <= 0) { showMessage('כמות חייבת להיות גדולה מ-0 ❌'); return }
-    // check not returning more than outstanding
     const outstanding = loanHistory
       .filter(l => l.item_id === item_id && l.borrower === info.returner)
       .reduce((s, l) => s + (l.quantity - (l.returned_qty || 0)), 0)
@@ -260,44 +264,88 @@ export default function Home() {
 
   function calculateGlobalStats() {
     if (!Array.isArray(allLoans) || allLoans.length === 0) return null
+    const now = new Date()
     const totalLoans = allLoans.length
     const totalBorrowed = allLoans.reduce((s, l) => s + l.quantity, 0)
     const totalReturned = allLoans.reduce((s, l) => s + (l.returned_qty || 0), 0)
+    const totalOutstanding = totalBorrowed - totalReturned
+
     const borrowerMap = {}
     allLoans.forEach(loan => {
-      if (!borrowerMap[loan.borrower]) borrowerMap[loan.borrower] = { count: 0, quantity: 0, returned: 0 }
+      if (!borrowerMap[loan.borrower]) borrowerMap[loan.borrower] = { count: 0, quantity: 0, returned: 0, lastDate: null }
       borrowerMap[loan.borrower].count += 1
       borrowerMap[loan.borrower].quantity += loan.quantity
       borrowerMap[loan.borrower].returned += loan.returned_qty || 0
+      const d = new Date(loan.date_taken)
+      if (!borrowerMap[loan.borrower].lastDate || d > borrowerMap[loan.borrower].lastDate)
+        borrowerMap[loan.borrower].lastDate = d
     })
-    const topBorrowers = Object.entries(borrowerMap)
-      .map(([name, d]) => ({ name, loanCount: d.count, totalBorrowed: d.quantity, totalReturned: d.returned, outstanding: d.quantity - d.returned }))
-      .sort((a, b) => b.totalBorrowed - a.totalBorrowed).slice(0, 10)
+    const borrowers = Object.entries(borrowerMap)
+      .map(([name, d]) => ({ name, loanCount: d.count, totalBorrowed: d.quantity, totalReturned: d.returned, outstanding: d.quantity - d.returned, lastDate: d.lastDate }))
+      .sort((a, b) => b.outstanding - a.outstanding || b.totalBorrowed - a.totalBorrowed)
+
     const currentlyBorrowing = {}
     allLoans.forEach(loan => {
-      const outstanding = loan.quantity - (loan.returned_qty || 0)
-      if (outstanding > 0) {
+      const out = loan.quantity - (loan.returned_qty || 0)
+      if (out > 0) {
         if (!currentlyBorrowing[loan.borrower]) currentlyBorrowing[loan.borrower] = []
-        currentlyBorrowing[loan.borrower].push({ item_id: loan.item_id, quantity: outstanding, dateTaken: loan.date_taken })
+        const days = Math.floor((now - new Date(loan.date_taken)) / 86400000)
+        currentlyBorrowing[loan.borrower].push({ item_id: loan.item_id, quantity: out, dateTaken: loan.date_taken, days, overdue: days > 14 })
       }
     })
-    return { totalLoans, totalBorrowed, totalReturned, totalOutstanding: totalBorrowed - totalReturned, topBorrowers, currentlyBorrowing }
+
+    const overdueLoans = allLoans
+      .filter(l => (l.quantity - (l.returned_qty || 0)) > 0)
+      .map(l => ({ ...l, days: Math.floor((now - new Date(l.date_taken)) / 86400000), outstanding: l.quantity - (l.returned_qty || 0) }))
+      .filter(l => l.days > 14)
+      .sort((a, b) => b.days - a.days)
+
+    const itemUtil = items.map(item => {
+      const loaned = item.total_qty - item.available_qty
+      const pct = item.total_qty > 0 ? Math.round((loaned / item.total_qty) * 100) : 0
+      return { ...item, loaned, pct }
+    }).sort((a, b) => b.pct - a.pct)
+
+    const returnRate = totalBorrowed > 0 ? Math.round((totalReturned / totalBorrowed) * 100) : 0
+    const utilizationPct = items.length > 0
+      ? Math.round(items.reduce((s, i) => s + (i.total_qty > 0 ? (i.total_qty - i.available_qty) / i.total_qty : 0), 0) / items.length * 100)
+      : 0
+
+    return { totalLoans, totalBorrowed, totalReturned, totalOutstanding, borrowers, currentlyBorrowing, overdueLoans, itemUtil, returnRate, utilizationPct }
   }
 
   function calculateItemStats(loans) {
     if (!Array.isArray(loans) || loans.length === 0) return null
+    const now = new Date()
     const borrowerMap = {}
     loans.forEach(loan => {
-      if (!borrowerMap[loan.borrower]) borrowerMap[loan.borrower] = { borrowed: 0, returned: 0 }
+      if (!borrowerMap[loan.borrower]) borrowerMap[loan.borrower] = { borrowed: 0, returned: 0, dates: [] }
       borrowerMap[loan.borrower].borrowed += loan.quantity || 0
       borrowerMap[loan.borrower].returned += loan.returned_qty || 0
+      borrowerMap[loan.borrower].dates.push(new Date(loan.date_taken))
     })
     const borrowers = Object.entries(borrowerMap)
-      .map(([name, d]) => ({ name, borrowed: d.borrowed, returned: d.returned, outstanding: d.borrowed - d.returned }))
-      .sort((a, b) => b.outstanding - a.outstanding)
+      .map(([name, d]) => ({ name, borrowed: d.borrowed, returned: d.returned, outstanding: d.borrowed - d.returned, lastDate: d.dates.sort((a, b) => b - a)[0] }))
+      .sort((a, b) => b.outstanding - a.outstanding || b.borrowed - a.borrowed)
+
     const totalBorrowed = loans.reduce((s, l) => s + (l.quantity || 0), 0)
     const totalReturned = loans.reduce((s, l) => s + (l.returned_qty || 0), 0)
-    return { totalLoans: loans.length, totalBorrowed, totalReturned, totalOutstanding: totalBorrowed - totalReturned, borrowers }
+    const totalOutstanding = totalBorrowed - totalReturned
+    const returnRate = totalBorrowed > 0 ? Math.round((totalReturned / totalBorrowed) * 100) : 0
+
+    const loanLog = [...loans].sort((a, b) => new Date(b.date_taken) - new Date(a.date_taken)).map(l => ({
+      ...l,
+      days: Math.floor((now - new Date(l.date_taken)) / 86400000),
+      outstanding: (l.quantity || 0) - (l.returned_qty || 0),
+      overdue: Math.floor((now - new Date(l.date_taken)) / 86400000) > 14 && ((l.quantity || 0) - (l.returned_qty || 0)) > 0
+    }))
+
+    const overdueCount = loanLog.filter(l => l.overdue).length
+    const avgDaysOut = loans.length > 0
+      ? Math.round(loans.reduce((s, l) => s + Math.floor((now - new Date(l.date_taken)) / 86400000), 0) / loans.length)
+      : 0
+
+    return { totalLoans: loans.length, totalBorrowed, totalReturned, totalOutstanding, returnRate, borrowers, loanLog, overdueCount, avgDaysOut }
   }
 
   function isOverdue(dateTaken, days = 14) {
@@ -340,17 +388,17 @@ export default function Home() {
   }
 
   async function processMassLoans() {
-    if (!massBorrower || !massAdmin || Object.keys(massSelection).length === 0) {
+    const selectedItems_pre = Object.entries(massSelection).filter(([, q]) => q > 0)
+    if (!massBorrower || !massAdmin || selectedItems_pre.length === 0) {
       showMessage('בחר משאיל, אדמין ופריטים לפחות ❌'); return
     }
     setLoadingAction(true)
     try {
-      const selectedItems = Object.entries(massSelection).filter(([, q]) => q > 0).map(([item_id, qty]) => ({ item_id, quantity: parseInt(qty) }))
-      // validate availability before sending anything
+      const selectedItems = selectedItems_pre.map(([item_id, qty]) => ({ item_id, quantity: parseInt(qty) }))
       for (const { item_id, quantity } of selectedItems) {
         const item = items.find(i => i.id === item_id)
         if (quantity > item.available_qty) {
-          showMessage(`\${item.name}: מבוקש ${quantity} אך זמין רק ${item.available_qty} ❌`)
+          showMessage(`${item.name}: מבוקש ${quantity} אך זמין רק ${item.available_qty} ❌`)
           setLoadingAction(false)
           return
         }
@@ -378,14 +426,13 @@ export default function Home() {
     setLoadingAction(true)
     try {
       const selectedItems = Object.entries(massReturnQty).filter(([, q]) => q > 0).map(([item_id, qty]) => ({ item_id, quantity: parseInt(qty) }))
-      // validate return quantities before sending anything
       for (const { item_id, quantity } of selectedItems) {
         const borrowed = allLoans
           .filter(l => l.item_id === item_id && l.borrower === massReturnBorrower && (l.quantity - (l.returned_qty || 0)) > 0)
           .reduce((s, l) => s + (l.quantity - (l.returned_qty || 0)), 0)
         if (quantity > borrowed) {
           const item = items.find(i => i.id === item_id)
-          showMessage(`\${item?.name}: מבוקש להחזיר ${quantity} אך בהשאלה רק ${borrowed} ❌`)
+          showMessage(`${item?.name}: מבוקש להחזיר ${quantity} אך בהשאלה רק ${borrowed} ❌`)
           setLoadingAction(false)
           return
         }
@@ -423,6 +470,71 @@ export default function Home() {
     setFormInfo(prev => ({ ...prev, [item_id]: { borrower: last.borrower, qty: '', admin: last.admin } }))
     setShowLoanModal(item_id)
   }
+
+  // literal newlines in .join() calls). Keeping only this clean version that builds
+  // a plain text string and opens WhatsApp directly — same pattern as handleShare.
+  function exportGlobalStats() {
+    const stats = calculateGlobalStats()
+    if (!stats) { showMessage('אין נתונים לייצוא ❌'); return }
+    const date = new Date().toLocaleDateString('he-IL')
+    let txt = `📊 סטטיסטיקה כללית — גמ"ח עיר דוד\n${date}\n`
+    txt += `${'─'.repeat(28)}\n`
+    txt += `סה"כ השאלות: ${stats.totalLoans}\n`
+    txt += `סה"כ יחידות שהושאלו: ${stats.totalBorrowed}\n`
+    txt += `סה"כ יחידות שהוחזרו: ${stats.totalReturned}\n`
+    txt += `עדיין בהשאלה: ${stats.totalOutstanding}\n`
+    txt += `אחוז החזרה: ${stats.returnRate}%\n`
+    txt += `תפוסה ממוצעת: ${stats.utilizationPct}%\n`
+    if (stats.overdueLoans.length > 0) {
+      txt += `\n⚠️ פריטים באיחור (${stats.overdueLoans.length}):\n`
+      stats.overdueLoans.forEach(l => {
+        const item = items.find(i => i.id === l.item_id)
+        txt += `  • ${l.borrower} — ${item?.name || 'פריט'}: ${l.outstanding} יח׳ (${l.days} ימים)\n`
+      })
+    }
+    txt += `\n👥 משאילים פעילים (${Object.keys(stats.currentlyBorrowing).length}):\n`
+    Object.entries(stats.currentlyBorrowing).forEach(([borrower, loans]) => {
+      txt += `  ${borrower}:\n`
+      loans.forEach(l => {
+        const item = items.find(i => i.id === l.item_id)
+        txt += `    • ${item?.name || 'פריט'}: ${l.quantity} יח׳ (${l.days} ימים${l.overdue ? ' ⚠️' : ''})\n`
+      })
+    })
+    txt += `\n📦 ניצולת פריטים:\n`
+    stats.itemUtil.forEach(i => {
+      txt += `  ${i.name}: ${i.loaned}/${i.total_qty} (${i.pct}%)\n`
+    })
+    window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, '_blank')
+    showMessage('הדוח נשלח ✅')
+  }
+
+  // This version takes the item object (matching the JSX call site) and builds a clean string.
+  function exportItemStats(item) {
+    const stats = calculateItemStats(loanHistory)
+    if (!stats) { showMessage('אין נתונים לייצוא ❌'); return }
+    const date = new Date().toLocaleDateString('he-IL')
+    let txt = `📦 סטטיסטיקת פריט: ${item.name}\n${date}\n`
+    txt += `${'─'.repeat(28)}\n`
+    txt += `סה"כ השאלות: ${stats.totalLoans}\n`
+    txt += `הושאל: ${stats.totalBorrowed} | הוחזר: ${stats.totalReturned} | פתוח: ${stats.totalOutstanding}\n`
+    txt += `אחוז החזרה: ${stats.returnRate}%\n`
+    txt += `ממוצע ימי השאלה: ${stats.avgDaysOut}\n`
+    if (stats.overdueCount > 0) txt += `⚠️ השאלות באיחור: ${stats.overdueCount}\n`
+    txt += `\n👤 לפי משאיל:\n`
+    stats.borrowers.forEach(b => {
+      txt += `  ${b.name}: ${b.borrowed} יח׳ הושאלו, ${b.returned} הוחזרו, ${b.outstanding} פתוח\n`
+    })
+    txt += `\n📜 יומן השאלות:\n`
+    stats.loanLog.forEach(l => {
+      const d = new Date(l.date_taken).toLocaleDateString('he-IL')
+      const status = l.outstanding === 0 ? 'הוחזר' : l.overdue ? '⚠️ איחור' : 'פתוח'
+      txt += `  ${d} — ${l.borrower}: ${l.quantity} יח׳ [${status}]\n`
+    })
+    window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, '_blank')
+    showMessage('הדוח נשלח ✅')
+  }
+
+  // never called from anywhere in the JSX.
 
   function handleShare() {
     if (!selectedShareBorrower) { showMessage('אנא בחר משאיל'); return }
@@ -465,7 +577,7 @@ export default function Home() {
       {/* ── MESSAGE ── */}
       {message && <div className="message" onClick={() => setMessage('')} style={{ cursor: 'pointer' }}>{message}</div>}
 
-      {/* ── GLOBAL LOADING OVERLAY — one loader for all states ── */}
+      {/* ── GLOBAL LOADING OVERLAY ── */}
       {(loadingItems || loadingAction || loadingHistory) && (
         <div className="global-loading-overlay">
           <div className="loader-dots">
@@ -677,41 +789,111 @@ export default function Home() {
       {/* ── INFO MODAL (per item) ── */}
       {items.map(item => showInfoModal === item.id && (() => {
         const stats = calculateItemStats(loanHistory)
+        const utilPct = item.total_qty > 0 ? Math.round((item.total_qty - item.available_qty) / item.total_qty * 100) : 0
         return (
           <div key={`info-${item.id}`} className="modal" onMouseDown={() => closeAllModals()}>
-            <div className="modal-form" style={{ maxHeight: '85vh', overflowY: 'auto', maxWidth: '520px' }} onMouseDown={e => e.stopPropagation()}>
-              <h2>📋 {item.name}</h2>
+            <div className="modal-form" style={{ maxHeight: '88vh', overflowY: 'auto', maxWidth: '540px' }} onMouseDown={e => e.stopPropagation()}>
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem', gap: '0.5rem' }}>
+                <h2 style={{ margin: 0, fontSize: '1.1rem' }}>📋 {item.name}</h2>
+                <button className="export-btn" style={{ width: 'auto', padding: '0.4rem 0.75rem', marginBottom: 0 }} onClick={() => exportItemStats(item)}>
+                  📤 ייצא
+                </button>
+              </div>
 
               {!stats ? <p>אין היסטוריה להשאלה</p> : (
                 <>
-                  <div className="stats-grid" style={{ marginBottom: '1rem' }}>
-                    <div className="stat-box"><h4>השאלות</h4><p>{stats.totalLoans}</p></div>
-                    <div className="stat-box"><h4>יח׳ בהשאלה</h4><p style={{ color: 'var(--red)' }}>{stats.totalOutstanding}</p></div>
-                    <div className="stat-box"><h4>הושאל</h4><p>{stats.totalBorrowed}</p></div>
-                    <div className="stat-box"><h4>הוחזר</h4><p style={{ color: 'var(--green)' }}>{stats.totalReturned}</p></div>
-                  </div>
-
-                  <div className="history-card">
-                    <h3>👤 לפי משאיל</h3>
-                    {stats.borrowers.map((b, i) => (
-                      <div key={i} className="history-item">
-                        <strong>{b.name}</strong>
-                        <p>הושאל: {b.borrowed} | הוחזר: {b.returned} | פתוח: {b.outstanding}</p>
-                      </div>
+                  <div className="stats-tabs">
+                    {[['overview', 'סיכום'], ['borrowers', 'משאילים'], ['log', 'יומן']].map(([id, label]) => (
+                      <button key={id} className={`stats-tab${itemStatsTab === id ? ' active' : ''}`} onClick={() => setItemStatsTab(id)}>{label}</button>
                     ))}
                   </div>
 
-                  <div className="history-card">
-                    <h3>📜 פרטי השאלות</h3>
-                    {loanHistory.map((loan, i) => (
-                      <div key={i} className="history-item">
-                        <strong>{loan.borrower}</strong>
-                        <p>כמות: {loan.quantity} | הוחזר: {loan.returned_qty || 0} | תאריך: {new Date(loan.date_taken).toLocaleDateString('he-IL')}</p>
-                        {loan.admin && <p>מאשר: {loan.admin}</p>}
-                        {isOverdue(loan.date_taken) && <p className="overdue">⚠️ יותר מ-14 ימים!</p>}
+                  {itemStatsTab === 'overview' && (
+                    <>
+                      <div className="stats-grid" style={{ marginBottom: '1rem' }}>
+                        <div className="stat-box"><h4>השאלות</h4><p>{stats.totalLoans}</p></div>
+                        <div className="stat-box"><h4>כרגע בחוץ</h4><p style={{ color: stats.totalOutstanding > 0 ? 'var(--red)' : 'var(--green)' }}>{stats.totalOutstanding}</p></div>
+                        <div className="stat-box"><h4>אחוז החזרה</h4><p style={{ color: stats.returnRate >= 80 ? 'var(--green)' : 'var(--amber)' }}>{stats.returnRate}%</p></div>
+                        <div className="stat-box"><h4>ממוצע ימים</h4><p>{stats.avgDaysOut}</p></div>
                       </div>
-                    ))}
-                  </div>
+
+                      <div className="stats-section">
+                        <p className="stats-section-title">ניצולת מלאי</p>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                          <span style={{ fontSize: '0.82rem', color: 'var(--text-2)' }}>{item.total_qty - item.available_qty} / {item.total_qty} יחידות בשימוש</span>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 700, color: utilPct > 80 ? 'var(--red)' : utilPct > 50 ? 'var(--amber)' : 'var(--green)' }}>{utilPct}%</span>
+                        </div>
+                        <div className="progress-wrap">
+                          <div className="progress-fill" style={{ width: `${utilPct}%`, background: utilPct > 80 ? 'var(--red)' : utilPct > 50 ? 'var(--amber)' : 'var(--green)' }} />
+                        </div>
+                      </div>
+
+                      <div className="stats-section">
+                        <p className="stats-section-title">שיעור החזרה</p>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                          <span style={{ fontSize: '0.82rem', color: 'var(--text-2)' }}>{stats.totalReturned} הוחזרו מתוך {stats.totalBorrowed}</span>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-2)' }}>{stats.returnRate}%</span>
+                        </div>
+                        <div className="progress-wrap">
+                          <div className="progress-fill green" style={{ width: `${stats.returnRate}%` }} />
+                        </div>
+                      </div>
+
+                      {stats.overdueCount > 0 && (
+                        <div style={{ padding: '0.65rem 0.9rem', background: 'var(--red-dim)', border: '1px solid rgba(248,113,113,0.25)', borderRadius: 'var(--radius-sm)', marginBottom: '0.75rem' }}>
+                          <span style={{ color: 'var(--red)', fontWeight: 700, fontSize: '0.85rem' }}>⚠️ {stats.overdueCount} השאלות חריגות (מעל 14 יום)</span>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {itemStatsTab === 'borrowers' && (
+                    <div className="stats-section">
+                      <table className="stats-table">
+                        <thead>
+                          <tr>
+                            <th>שם</th>
+                            <th style={{ textAlign: 'center' }}>לקח</th>
+                            <th style={{ textAlign: 'center' }}>החזיר</th>
+                            <th style={{ textAlign: 'center' }}>פתוח</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {stats.borrowers.map((b, i) => (
+                            <tr key={i}>
+                              <td className="td-name">{b.name}</td>
+                              <td className="td-num">{b.borrowed}</td>
+                              <td className="td-num">{b.returned}</td>
+                              <td className="td-badge">
+                                {b.outstanding > 0
+                                  ? <span className="badge badge-red">{b.outstanding}</span>
+                                  : <span className="badge badge-green">✓</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {itemStatsTab === 'log' && (
+                    <div className="stats-section">
+                      {stats.loanLog.map((loan, i) => (
+                        <div key={i} className="history-item">
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
+                            <strong>{loan.borrower}</strong>
+                            <div style={{ display: 'flex', gap: '0.35rem', flexShrink: 0 }}>
+                              {loan.overdue && <span className="badge badge-red">⚠️ חריג</span>}
+                              {loan.outstanding === 0 && <span className="badge badge-green">הוחזר</span>}
+                              {loan.outstanding > 0 && !loan.overdue && <span className="badge badge-blue">{loan.outstanding} בחוץ</span>}
+                            </div>
+                          </div>
+                          <p>{new Date(loan.date_taken).toLocaleDateString('he-IL')} · {loan.quantity} יח׳ · {loan.days} ימים{loan.admin ? ` · ${loan.admin}` : ''}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </>
               )}
 
@@ -728,46 +910,140 @@ export default function Home() {
         const stats = calculateGlobalStats()
         return (
           <div className="modal" onMouseDown={() => closeAllModals()}>
-            <div className="modal-form" style={{ maxHeight: '90vh', overflowY: 'auto', maxWidth: '560px' }} onMouseDown={e => e.stopPropagation()}>
-              <h2>📊 סטטיסטיקה כללית</h2>
+            <div className="modal-form" style={{ maxHeight: '92vh', overflowY: 'auto', maxWidth: '600px' }} onMouseDown={e => e.stopPropagation()}>
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem', gap: '0.5rem' }}>
+                <h2 style={{ margin: 0 }}>📊 סטטיסטיקה</h2>
+                <button className="export-btn" style={{ width: 'auto', padding: '0.4rem 0.75rem', marginBottom: 0 }} onClick={exportGlobalStats}>
+                  📤 ייצא
+                </button>
+              </div>
+
               {!stats ? <p>אין נתונים להצגה</p> : (
                 <>
-                  <div className="stats-grid">
-                    <div className="stat-box"><h4>השאלות</h4><p>{stats.totalLoans}</p></div>
-                    <div className="stat-box"><h4>בהשאלה</h4><p style={{ color: 'var(--red)' }}>{stats.totalOutstanding}</p></div>
-                    <div className="stat-box"><h4>הושאל</h4><p>{stats.totalBorrowed}</p></div>
-                    <div className="stat-box"><h4>הוחזר</h4><p style={{ color: 'var(--green)' }}>{stats.totalReturned}</p></div>
-                  </div>
-
-                  <div className="history-card">
-                    <h3>👥 המשאילים המובילים</h3>
-                    {stats.topBorrowers.map((b, i) => (
-                      <div key={i} className="history-item">
-                        <strong>{i + 1}. {b.name}</strong>
-                        <p>השאלות: {b.loanCount} | הושאל: {b.totalBorrowed} | פתוח: {b.outstanding}</p>
-                      </div>
+                  <div className="stats-tabs">
+                    {[['overview', 'סיכום'], ['borrowers', 'משאילים'], ['items', 'פריטים'], ['overdue', 'חריגות']].map(([id, label]) => (
+                      <button key={id} className={`stats-tab${globalStatsTab === id ? ' active' : ''}`} onClick={() => setGlobalStatsTab(id)}>
+                        {id === 'overdue' && stats.overdueLoans.length > 0 ? `⚠️ ${label}` : label}
+                      </button>
                     ))}
                   </div>
 
-                  <div className="history-card">
-                    <h3>📦 בהשאלה כרגע</h3>
-                    {Object.entries(stats.currentlyBorrowing).length === 0 ? (
-                      <p>אין פריטים בהשאלה כרגע</p>
-                    ) : (
-                      Object.entries(stats.currentlyBorrowing).map(([borrower, loans], i) => (
-                        <div key={i} className="history-item">
-                          <strong>{borrower}</strong>
-                          {loans.map((loan, j) => {
-                            const item = items.find(it => it.id === loan.item_id)
-                            const days = Math.floor((new Date() - new Date(loan.dateTaken)) / (1000 * 60 * 60 * 24))
-                            return <p key={j}>• {item?.name || 'פריט'}: {loan.quantity} יח׳ — לפני {days} ימים</p>
-                          })}
+                  {globalStatsTab === 'overview' && (
+                    <>
+                      <div className="stats-grid">
+                        <div className="stat-box"><h4>סה"כ השאלות</h4><p>{stats.totalLoans}</p></div>
+                        <div className="stat-box"><h4>כרגע בחוץ</h4><p style={{ color: stats.totalOutstanding > 0 ? 'var(--red)' : 'var(--green)' }}>{stats.totalOutstanding}</p></div>
+                        <div className="stat-box"><h4>אחוז החזרה</h4><p style={{ color: stats.returnRate >= 80 ? 'var(--green)' : 'var(--amber)' }}>{stats.returnRate}%</p></div>
+                        <div className="stat-box"><h4>ניצולת מלאי</h4><p style={{ color: stats.utilizationPct > 80 ? 'var(--red)' : 'var(--blue)' }}>{stats.utilizationPct}%</p></div>
+                      </div>
+
+                      <div className="stats-section">
+                        <p className="stats-section-title">מי לקח כרגע</p>
+                        {Object.entries(stats.currentlyBorrowing).length === 0 ? (
+                          <p style={{ color: 'var(--text-3)', fontSize: '0.85rem' }}>אין פריטים בהשאלה כרגע</p>
+                        ) : (
+                          Object.entries(stats.currentlyBorrowing).map(([borrower, loans], i) => (
+                            <div key={i} className="history-item">
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <strong>{borrower}</strong>
+                                {loans.some(l => l.overdue) && <span className="badge badge-red">⚠️ חריג</span>}
+                              </div>
+                              {loans.map((loan, j) => {
+                                const it = items.find(x => x.id === loan.item_id)
+                                return (
+                                  <p key={j} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                    <span>• {it?.name || 'פריט'}: {loan.quantity} יח׳</span>
+                                    <span style={{ color: loan.overdue ? 'var(--red)' : 'var(--text-3)' }}>{loan.days} ימים</span>
+                                  </p>
+                                )
+                              })}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </>
+                  )}
+
+                  {globalStatsTab === 'borrowers' && (
+                    <div className="stats-section">
+                      <table className="stats-table">
+                        <thead>
+                          <tr>
+                            <th>שם</th>
+                            <th style={{ textAlign: 'center' }}>השאלות</th>
+                            <th style={{ textAlign: 'center' }}>לקח</th>
+                            <th style={{ textAlign: 'center' }}>פתוח</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {stats.borrowers.map((b, i) => (
+                            <tr key={i}>
+                              <td className="td-name">{b.name}</td>
+                              <td className="td-num">{b.loanCount}</td>
+                              <td className="td-num">{b.totalBorrowed}</td>
+                              <td className="td-badge">
+                                {b.outstanding > 0
+                                  ? <span className="badge badge-red">{b.outstanding}</span>
+                                  : <span className="badge badge-green">✓</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {globalStatsTab === 'items' && (
+                    <div className="stats-section">
+                      <p className="stats-section-title">ניצולת לפי פריט</p>
+                      {stats.itemUtil.map((item, i) => (
+                        <div key={i} className="util-row">
+                          <span className="util-name">{item.name}</span>
+                          <div className="util-bar-wrap">
+                            <div className="progress-wrap" style={{ flex: 1 }}>
+                              <div className="progress-fill" style={{
+                                width: `${item.pct}%`,
+                                background: item.pct > 80 ? 'var(--red)' : item.pct > 50 ? 'var(--amber)' : 'var(--green)'
+                              }} />
+                            </div>
+                            <span className="util-pct">{item.pct}%</span>
+                          </div>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-3)', flexShrink: 0 }}>{item.loaned}/{item.total_qty}</span>
                         </div>
-                      ))
-                    )}
-                  </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {globalStatsTab === 'overdue' && (
+                    <div className="stats-section">
+                      {stats.overdueLoans.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '2rem 0', color: 'var(--green)' }}>
+                          <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>✓</div>
+                          <p style={{ margin: 0, fontWeight: 700 }}>אין השאלות חריגות!</p>
+                        </div>
+                      ) : (
+                        <>
+                          <p className="stats-section-title">{stats.overdueLoans.length} השאלות מעל 14 יום</p>
+                          {stats.overdueLoans.map((loan, i) => {
+                            const it = items.find(x => x.id === loan.item_id)
+                            return (
+                              <div key={i} className="history-item">
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <strong>{loan.borrower}</strong>
+                                  <span className="badge badge-red">{loan.days} ימים</span>
+                                </div>
+                                <p>{it?.name || 'פריט'} · {loan.outstanding} יח׳ · {new Date(loan.date_taken).toLocaleDateString('he-IL')}</p>
+                              </div>
+                            )
+                          })}
+                        </>
+                      )}
+                    </div>
+                  )}
                 </>
               )}
+
               <div className="modal-buttons">
                 <button type="button" className="btn btn-ghost" style={{ flex: 'none', width: '100%' }} onClick={() => setShowGlobalHistory(false)}>סגור</button>
               </div>
@@ -941,6 +1217,7 @@ export default function Home() {
           </div>
         </div>
       )}
+
       {/* ── MOBILE BOTTOM TAB BAR ── */}
       <nav className="mobile-tab-bar">
         <button className="tab-btn" onClick={fetchAllLoans} disabled={loadingHistory}>
