@@ -12,6 +12,9 @@ export default function Home() {
     messageTimerRef.current = setTimeout(() => setMessage(''), 4000)
   }
 
+  // Rounds monetary values to 2 decimal places to avoid floating-point drift
+  function roundMoney(val) { return Math.round((val + Number.EPSILON) * 100) / 100 }
+
   const [showAddModal, setShowAddModal] = useState(false)
   const [showLoanModal, setShowLoanModal] = useState(null)
   const [showReturnModal, setShowReturnModal] = useState(null)
@@ -49,6 +52,7 @@ export default function Home() {
   const [sharePhoneNumber, setSharePhoneNumber] = useState('')
 
   const [massPayment, setMassPayment] = useState({})
+  const [paymentMismatches, setPaymentMismatches] = useState([]) // [{borrower, itemName, expected, paid, date}]
 
   const [globalStatsTab, setGlobalStatsTab] = useState('overview')
   const [itemStatsTab, setItemStatsTab] = useState('overview')
@@ -489,7 +493,7 @@ export default function Home() {
       const res = await apiFetch('/api/loans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item_id, borrower: info.borrower, quantity: qty, admin: info.admin, price: info.payment !== undefined && info.payment !== '' ? Number(info.payment) : -1 })
+        body: JSON.stringify({ item_id, borrower: info.borrower, quantity: qty, admin: info.admin, price: info.payment !== undefined && info.payment !== '' ? roundMoney(Number(info.payment)) : -1 })
       })
       const data = await res.json()
       if (res.ok && data.success) {
@@ -517,15 +521,38 @@ export default function Home() {
     if (outstanding > 0 && returnQty > outstanding) {
       showMessage(`לא ניתן להחזיר יותר מהמושאל (${outstanding}) ❌`); return
     }
+    // Overpayment is allowed — no cap on paid amount
+    // Find expected price for this borrower/item
+    const activeLoan = loanHistory.find(l => l.item_id === item_id && l.borrower === info.returner && (l.quantity - (l.returned_qty || 0)) > 0)
+    const expectedPrice = activeLoan?.payment !== undefined && activeLoan?.payment !== null && activeLoan?.payment !== -1 ? roundMoney(activeLoan.payment) : null
+    // If a price was set, cap returnQty to that loan's outstanding qty — can't partially return a paid loan
+    if (expectedPrice !== null) {
+      const pricedLoanOutstanding = activeLoan.quantity - (activeLoan.returned_qty || 0)
+      if (returnQty > pricedLoanOutstanding) {
+        showMessage(`להשאלה זו נקבע מחיר — ניתן להחזיר עד ${pricedLoanOutstanding} יח׳ בלבד ❌`); return
+      }
+    }
+    // If a price was set, require payment to be entered
+    if (expectedPrice !== null && (info.paidAmount === undefined || info.paidAmount === '')) {
+      showMessage('יש להזין סכום ששולם — נקבע מחיר להשאלה זו ❌'); return
+    }
     setLoadingAction(true)
     try {
       const res = await apiFetch('/api/return', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item_id, returner: info.returner, quantity: returnQty, price: info.paidAmount !== undefined && info.paidAmount !== '' ? Number(info.paidAmount) : -1 })
+        body: JSON.stringify({ item_id, returner: info.returner, quantity: returnQty, price: info.paidAmount !== undefined && info.paidAmount !== '' ? roundMoney(Number(info.paidAmount)) : -1 })
       })
       const data = await res.json()
       if (res.ok && data.success) {
+        // Record mismatch only if paid LESS than expected (underpayment)
+        if (expectedPrice !== null && info.paidAmount !== undefined && info.paidAmount !== '') {
+          const paid = roundMoney(Number(info.paidAmount))
+          if (paid < expectedPrice) {
+            const itemName = items.find(i => i.id === item_id)?.name || 'פריט'
+            setPaymentMismatches(prev => [...prev, { borrower: info.returner, itemName, item_id, expected: expectedPrice, paid, date: new Date().toISOString(), status: 'mismatch' }])
+          }
+        }
         showMessage(`פריט הוחזר על ידי ${info.returner} ✅`)
         setFormInfo({ ...formInfo, [item_id]: {} })
         setShowReturnModal(null)
@@ -585,7 +612,30 @@ export default function Home() {
         borrowerMap[loan.borrower].lastDate = d
     })
     const borrowers = Object.entries(borrowerMap)
-      .map(([name, d]) => ({ name, loanCount: d.count, totalBorrowed: d.quantity, totalReturned: d.returned, outstanding: d.quantity - d.returned, lastDate: d.lastDate }))
+      .map(([name, d]) => {
+        // Compute payment status using paymentMismatches
+        let paymentStatus = null
+        const mismatch = paymentMismatches.find(m => m.borrower === name && (m.status === 'mismatch' || m.status === 'ignored'))
+        if (mismatch) {
+          if (mismatch.status === 'ignored') {
+            paymentStatus = { label: 'התעלמו', type: 'ignored' }
+          } else {
+            paymentStatus = { label: 'חסר', paid: mismatch.paid, expected: mismatch.expected, type: 'mismatch' }
+          }
+        } else {
+          // Check if any of their loans had a price set
+          const theirLoans = allLoans.filter(l => l.borrower === name && l.payment !== undefined && l.payment !== null && l.payment !== -1)
+          if (theirLoans.length > 0) {
+            const allFullyReturned = theirLoans.every(l => (l.quantity - (l.returned_qty || 0)) === 0)
+            if (allFullyReturned) {
+              paymentStatus = { label: 'שולם', type: 'paid' }
+            } else {
+              paymentStatus = { label: 'טרם שולם', type: 'unpaid' }
+            }
+          }
+        }
+        return { name, loanCount: d.count, totalBorrowed: d.quantity, totalReturned: d.returned, outstanding: d.quantity - d.returned, lastDate: d.lastDate, paymentStatus }
+      })
       .sort((a, b) => b.outstanding - a.outstanding || b.totalBorrowed - a.totalBorrowed)
 
     const currentlyBorrowing = {}
@@ -623,13 +673,47 @@ export default function Home() {
     const now = new Date()
     const borrowerMap = {}
     loans.forEach(loan => {
-      if (!borrowerMap[loan.borrower]) borrowerMap[loan.borrower] = { borrowed: 0, returned: 0, dates: [] }
+      if (!borrowerMap[loan.borrower]) borrowerMap[loan.borrower] = { borrowed: 0, returned: 0, dates: [], pricedLoans: [] }
       borrowerMap[loan.borrower].borrowed += loan.quantity || 0
       borrowerMap[loan.borrower].returned += loan.returned_qty || 0
       borrowerMap[loan.borrower].dates.push(new Date(loan.date_taken))
+      // Track price info per loan
+      if (loan.payment !== undefined && loan.payment !== null && loan.payment !== -1) {
+        borrowerMap[loan.borrower].pricedLoans.push({
+          expected: loan.payment,
+          paidBack: loan.price_paid !== undefined && loan.price_paid !== null ? loan.price_paid : null,
+          fullyReturned: (loan.quantity || 0) - (loan.returned_qty || 0) === 0
+        })
+      }
     })
     const borrowers = Object.entries(borrowerMap)
-      .map(([name, d]) => ({ name, borrowed: d.borrowed, returned: d.returned, outstanding: d.borrowed - d.returned, lastDate: d.dates.sort((a, b) => b - a)[0] }))
+      .map(([name, d]) => {
+        // Summarise payment status for this borrower
+        let paymentStatus = null // null = no price set
+        if (d.pricedLoans.length > 0) {
+          const mismatch = paymentMismatches.find(m => m.borrower === name)
+          if (mismatch) {
+            if (mismatch.status === 'fixed') {
+              paymentStatus = { label: 'תוקן', paid: mismatch.paid, expected: mismatch.expected, type: 'fixed' }
+            } else if (mismatch.status === 'ignored') {
+              paymentStatus = { label: 'התעלמו', paid: mismatch.paid, expected: mismatch.expected, type: 'ignored' }
+            } else {
+              paymentStatus = { label: 'הפרש', paid: mismatch.paid, expected: mismatch.expected, type: 'mismatch' }
+            }
+          } else {
+            const totalExpected = d.pricedLoans.reduce((s, p) => s + p.expected, 0)
+            const allReturned = d.pricedLoans.every(p => p.fullyReturned)
+            if (allReturned) {
+              // returned with no mismatch recorded → paid exactly
+              paymentStatus = { label: 'שולם', expected: totalExpected, type: 'paid' }
+            } else {
+              // still out → not yet paid
+              paymentStatus = { label: 'טרם שולם', expected: totalExpected, type: 'unpaid' }
+            }
+          }
+        }
+        return { name, borrowed: d.borrowed, returned: d.returned, outstanding: d.borrowed - d.returned, lastDate: d.dates.sort((a, b) => b - a)[0], paymentStatus }
+      })
       .sort((a, b) => b.outstanding - a.outstanding || b.borrowed - a.borrowed)
 
     const totalBorrowed = loans.reduce((s, l) => s + (l.quantity || 0), 0)
@@ -656,8 +740,8 @@ export default function Home() {
     return Math.floor((new Date() - new Date(dateTaken)) / (1000 * 60 * 60 * 24)) > days
   }
 
-  function selectOpenBorrower(borrowerName, qty) {
-    setFormInfo(prev => ({ ...prev, [showReturnModal]: { returner: borrowerName, returnQty: String(qty) } }))
+  function selectOpenBorrower(borrowerName, qty, price) {
+    setFormInfo(prev => ({ ...prev, [showReturnModal]: { returner: borrowerName, returnQty: String(qty), expectedPrice: price ?? null } }))
   }
 
   async function openReturnModal(item_id) {
@@ -674,7 +758,15 @@ export default function Home() {
         const out = loan.quantity - (loan.returned_qty || 0)
         if (out > 0) borrowers[loan.borrower] = (borrowers[loan.borrower] || 0) + out
       })
-      setOpenBorrowers(Object.entries(borrowers).map(([name, qty]) => ({ name, qty })))
+      // Also gather the total price charged per borrower (sum of all active loan payments)
+      const borrowerPrices = {}
+      loans.filter(l => l.item_id === item_id).forEach(loan => {
+        const out = loan.quantity - (loan.returned_qty || 0)
+        if (out > 0 && loan.payment !== undefined && loan.payment !== null && loan.payment !== -1) {
+          borrowerPrices[loan.borrower] = (borrowerPrices[loan.borrower] || 0) + loan.payment
+        }
+      })
+      setOpenBorrowers(Object.entries(borrowers).map(([name, qty]) => ({ name, qty, price: borrowerPrices[name] ?? null })))
     } catch (err) {
       showMessage(`שגיאה בטעינת המשאילים: ${err.message}`)
     } finally {
@@ -708,7 +800,7 @@ export default function Home() {
         }
       }
       for (const { item_id, quantity } of selectedItems) {
-        const res = await apiFetch('/api/loans', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id, borrower: massBorrower, quantity, admin: massAdmin, price: massPayment.amount !== undefined && massPayment.amount !== '' ? Number(massPayment.amount) : -1 }) })
+        const res = await apiFetch('/api/loans', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id, borrower: massBorrower, quantity, admin: massAdmin, price: massPayment.amount !== undefined && massPayment.amount !== '' ? roundMoney(Number(massPayment.amount)) : -1 }) })
         const data = await res.json()
         if (!res.ok || !data.success) throw new Error(`שגיאה בפריט ${items.find(i => i.id === item_id)?.name}: ${data.error}`)
       }
@@ -727,6 +819,15 @@ export default function Home() {
     if (!massReturnBorrower || Object.values(massReturnQty).every(v => v <= 0)) {
       showMessage('יש לבחור לווה ולהגדיר כמויות ❌'); return
     }
+    // Check if any selected item has a price set — require payment field
+    const selectedItems_check = Object.entries(massReturnQty).filter(([, q]) => q > 0).map(([item_id]) => item_id)
+    const hasAnyPrice = selectedItems_check.some(item_id => {
+      const loan = allLoans.find(l => l.item_id === item_id && l.borrower === massReturnBorrower && (l.quantity - (l.returned_qty || 0)) > 0 && l.payment !== undefined && l.payment !== null && l.payment !== -1)
+      return !!loan
+    })
+    if (hasAnyPrice && (massPayment.paid === undefined || massPayment.paid === '')) {
+      showMessage('יש להזין סכום ששולם — נקבע מחיר לאחד מהפריטים ❌'); return
+    }
     setLoadingAction(true)
     try {
       const selectedItems = Object.entries(massReturnQty).filter(([, q]) => q > 0).map(([item_id, qty]) => ({ item_id, quantity: parseInt(qty) }))
@@ -741,11 +842,22 @@ export default function Home() {
           return
         }
       }
+      const newMismatches = []
       for (const { item_id, quantity } of selectedItems) {
-        const res = await apiFetch('/api/return', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id, returner: massReturnBorrower, quantity, price: massPayment.paid !== undefined && massPayment.paid !== '' ? Number(massPayment.paid) : -1 }) })
+        const res = await apiFetch('/api/return', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id, returner: massReturnBorrower, quantity, price: massPayment.paid !== undefined && massPayment.paid !== '' ? roundMoney(Number(massPayment.paid)) : -1 }) })
         const data = await res.json()
         if (!res.ok || !data.success) throw new Error(`שגיאה בהחזרה ${items.find(i => i.id === item_id)?.name}: ${data.error}`)
+        // Record mismatch only if paid LESS than expected (underpayment)
+        const activeLoan = allLoans.find(l => l.item_id === item_id && l.borrower === massReturnBorrower && (l.quantity - (l.returned_qty || 0)) > 0 && l.payment !== undefined && l.payment !== null && l.payment !== -1)
+        if (activeLoan && massPayment.paid !== undefined && massPayment.paid !== '') {
+          const paid = roundMoney(Number(massPayment.paid))
+          if (paid < activeLoan.payment) {
+            const itemName = items.find(i => i.id === item_id)?.name || 'פריט'
+            newMismatches.push({ borrower: massReturnBorrower, itemName, item_id, expected: activeLoan.payment, paid, date: new Date().toISOString(), status: 'mismatch' })
+          }
+        }
       }
+      if (newMismatches.length > 0) setPaymentMismatches(prev => [...prev, ...newMismatches])
       showMessage(`${selectedItems.length} פריטים הוחזרו ✅`)
       setShowMassMode(false); setMassMode(null); setMassSelection({}); setMassReturnBorrower(''); setMassReturnQty({})
       setItems(await (await apiFetch('/api/items')).json())
@@ -800,16 +912,51 @@ export default function Home() {
       })
     }
 
+    const activeMismatches = paymentMismatches.filter(m => m.status === 'mismatch')
+    const fixedMismatches = paymentMismatches.filter(m => m.status === 'fixed')
+    const ignoredMismatches = paymentMismatches.filter(m => m.status === 'ignored')
+    if (paymentMismatches.length > 0) {
+      txt += `\n💰 *הפרשי תשלום — ${paymentMismatches.length}*\n`
+      activeMismatches.forEach(m => { txt += `  ⚠️ ${m.borrower} | ${m.itemName} | נדרש: ${m.expected}₪ | שולם: ${m.paid}₪\n` })
+      fixedMismatches.forEach(m => { txt += `  ✓ ${m.borrower} | ${m.itemName} | תוקן: ${m.paid}₪ (נדרש: ${m.expected}₪)\n` })
+      ignoredMismatches.forEach(m => { txt += `  — ${m.borrower} | ${m.itemName} | התעלמו | הפרש: ${m.paid}₪ / ${m.expected}₪\n` })
+    }
+
     const activeBorrowers = Object.keys(stats.currentlyBorrowing)
     if (activeBorrowers.length > 0) {
       txt += `\n👥 *לווים פעילים — ${activeBorrowers.length}*\n`
       activeBorrowers.forEach(borrower => {
-        txt += `\n  👤 ${borrower}\n`
+        const bStats = stats.borrowers.find(b => b.name === borrower)
+        let paymentTxt = ''
+        if (bStats?.paymentStatus) {
+          const ps = bStats.paymentStatus
+          if (ps.type === 'paid') paymentTxt = ' | 💰 שולם ✓'
+          else if (ps.type === 'unpaid') paymentTxt = ' | 💰 טרם שולם'
+          else if (ps.type === 'mismatch') paymentTxt = ` | 💰 חסר: שולם ${ps.paid}₪ מתוך ${ps.expected}₪`
+          else if (ps.type === 'ignored') paymentTxt = ' | 💰 התעלמו'
+        }
+        txt += `\n  👤 ${borrower}${paymentTxt}\n`
         stats.currentlyBorrowing[borrower].forEach(l => {
           const item = items.find(i => i.id === l.item_id)
           const flag = l.overdue ? ' ⚠️' : ''
           txt += `     • ${item?.name || 'פריט'}: ${l.quantity} יח׳ (${l.days} ימים)${flag}\n`
         })
+      })
+    }
+
+    if (stats.borrowers.length > 0) {
+      txt += `\n📋 *כל הלווים*\n`
+      stats.borrowers.forEach(b => {
+        const outTxt = b.outstanding > 0 ? ` | פתוח: ${b.outstanding} ⚠️` : ' | הוחזר הכל ✓'
+        let paymentTxt = ''
+        if (b.paymentStatus) {
+          const ps = b.paymentStatus
+          if (ps.type === 'paid') paymentTxt = ' | 💰 שולם ✓'
+          else if (ps.type === 'unpaid') paymentTxt = ' | 💰 טרם שולם'
+          else if (ps.type === 'mismatch') paymentTxt = ` | 💰 חסר: ${ps.paid}₪ / ${ps.expected}₪`
+          else if (ps.type === 'ignored') paymentTxt = ' | 💰 התעלמו'
+        }
+        txt += `  • ${b.name}: ${b.loanCount} השאלות, ${b.totalBorrowed} יח׳${outTxt}${paymentTxt}\n`
       })
     }
 
@@ -842,7 +989,15 @@ export default function Home() {
       txt += `\n👥 *לפי לווה*\n`
       stats.borrowers.forEach(b => {
         const outstanding = b.outstanding > 0 ? ` | פתוח: ${b.outstanding} ⚠️` : ' | הוחזר הכל ✓'
-        txt += `  • ${b.name}: ${b.borrowed} הושאלו, ${b.returned} הוחזרו${outstanding}\n`
+        let paymentTxt = ''
+        if (b.paymentStatus) {
+          if (b.paymentStatus.type === 'mismatch') paymentTxt = ` | 💰 חסר: נדרש ${b.paymentStatus.expected}₪ שולם ${b.paymentStatus.paid}₪`
+          else if (b.paymentStatus.type === 'fixed') paymentTxt = ` | 💰 תוקן: ${b.paymentStatus.paid}₪`
+          else if (b.paymentStatus.type === 'ignored') paymentTxt = ` | 💰 התעלמו מהפרש`
+          else if (b.paymentStatus.type === 'paid') paymentTxt = ` | 💰 שולם ✓ (${b.paymentStatus.expected}₪)`
+          else if (b.paymentStatus.type === 'unpaid') paymentTxt = ` | 💰 טרם שולם (${b.paymentStatus.expected}₪)`
+        }
+        txt += `  • ${b.name}: ${b.borrowed} הושאלו, ${b.returned} הוחזרו${outstanding}${paymentTxt}\n`
       })
     }
 
@@ -851,7 +1006,8 @@ export default function Home() {
       stats.loanLog.forEach(l => {
         const d = new Date(l.date_taken).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric', year: '2-digit' })
         const status = l.outstanding === 0 ? '✓ הוחזר' : l.overdue ? '⚠️ איחור' : '⏳ פתוח'
-        txt += `  ${d}  |  ${l.borrower}  |  ${l.quantity} יח׳  |  ${status}\n`
+        const priceTxt = l.payment !== undefined && l.payment !== null && l.payment !== -1 ? ` | 💰 ${l.payment}₪` : ''
+        txt += `  ${d}  |  ${l.borrower}  |  ${l.quantity} יח׳  |  ${status}${priceTxt}\n`
       })
     }
 
@@ -877,6 +1033,10 @@ export default function Home() {
     showMessage('נפתח וואטסאפ לשליחה ✅')
   }
 
+  const now = new Date()
+  const globalAlertCount = paymentMismatches.filter(m => !m.status || m.status === 'mismatch').length +
+    (Array.isArray(allLoans) ? allLoans.filter(l => (l.quantity - (l.returned_qty || 0)) > 0 && Math.floor((now - new Date(l.date_taken)) / 86400000) > 14).length : 0)
+
   return (
     <main>
       {/* ── HEADER ── */}
@@ -884,8 +1044,9 @@ export default function Home() {
         <h1 className="app-title">גמ"ח <span>עיר דוד</span></h1>
         <p className="app-tagline">נוצר ע"י איתמר קצובר</p>
         <div className="header-actions">
-          <button className="hdr-btn" data-tutorial="tutorial-stats" onClick={fetchAllLoans} disabled={loadingHistory} title="סטטיסטיקה">
+          <button className="hdr-btn" data-tutorial="tutorial-stats" onClick={fetchAllLoans} disabled={loadingHistory} title="סטטיסטיקה" style={{ position: 'relative' }}>
             <span className="icon">📊</span><span>סטטיסטיקה</span>
+            {globalAlertCount > 0 && <span className="alert-dot">{globalAlertCount}</span>}
           </button>
           <button className="hdr-btn" data-tutorial="tutorial-send" onClick={() => { setShowShareModal(true); fetchAllLoans() }} title="WhatsApp">
             <span className="icon">💬</span><span>שלח</span>
@@ -952,9 +1113,12 @@ export default function Home() {
                       onClick={() => { setEditItem({ name: item.name, total_qty: item.total_qty, image: null }); setShowEditModal(item.id) }}>
                       ✏️
                     </button>
-                    <button className="card-icon-btn" title="היסטוריה" disabled={loadingHistory}
+                    <button className="card-icon-btn" title="היסטוריה" disabled={loadingHistory} style={{ position: 'relative' }}
                       onClick={() => fetchLoanHistory(item.id)}>
                       ℹ️
+                      {Array.isArray(allLoans) && allLoans.some(l => l.item_id === item.id && (l.quantity - (l.returned_qty || 0)) > 0 && Math.floor((now - new Date(l.date_taken)) / 86400000) > 14) && (
+                        <span className="alert-dot" style={{ top: '-4px', right: '-4px' }}>!</span>
+                      )}
                     </button>
                   </div>
 
@@ -1069,8 +1233,9 @@ export default function Home() {
               <div className="borrowers-checklist">
                 <p className="checklist-label">בחרו לווה לבחירה מהירה:</p>
                 {openBorrowers.map((b, i) => (
-                  <button key={i} type="button" className="borrower-btn" onClick={() => selectOpenBorrower(b.name, b.qty)}>
-                    {b.name} — {b.qty} יח׳ בהשאלה
+                  <button key={i} type="button" className={`borrower-btn${b.price !== null ? ' borrower-btn-has-price' : ''}`} onClick={() => selectOpenBorrower(b.name, b.qty, b.price)}>
+                    <span>{b.name} — {b.qty} יח׳ בהשאלה</span>
+                    {b.price !== null && <span className="price-badge">💰 {b.price} ש"ח</span>}
                   </button>
                 ))}
               </div>
@@ -1086,23 +1251,52 @@ export default function Home() {
               type="number"
               placeholder="כמות"
               min="1"
+              max={(() => {
+                const returner = formInfo[item.id]?.returner
+                if (!returner) return undefined
+                // If there's a priced loan, cap to that loan's outstanding (can't split a paid loan)
+                const pricedLoan = loanHistory.find(l => l.item_id === item.id && l.borrower === returner && (l.quantity - (l.returned_qty || 0)) > 0 && l.payment !== undefined && l.payment !== null && l.payment !== -1)
+                if (pricedLoan) return pricedLoan.quantity - (pricedLoan.returned_qty || 0)
+                return loanHistory
+                  .filter(l => l.item_id === item.id && l.borrower === returner)
+                  .reduce((s, l) => s + (l.quantity - (l.returned_qty || 0)), 0) || undefined
+              })()}
               value={formInfo[item.id]?.returnQty || ''}
               onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], returnQty: e.target.value } })}
               required
             />
-            <input
-              type="number"
-              step="0.01"
-              placeholder="סכום ששולם (ריק = חינם)"
-              value={formInfo[item.id]?.paidAmount || ''}
-              onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], paidAmount: e.target.value } })}
-            />
             {(() => {
-              const paid = parseFloat(formInfo[item.id]?.paidAmount || 0)
-              const required = loanHistory.find(l => l.item_id === item.id && l.borrower === formInfo[item.id]?.returner)?.payment || 0
-              if (required && required !== -1 && paid < required) {
-                return <div className="warning-message">⚠️ חובה: {required} ש"ח | שולם: {paid} ש"ח</div>
-              }
+              const expectedPrice = formInfo[item.id]?.expectedPrice ?? null
+              const hasPrice = expectedPrice !== null
+              const paid = formInfo[item.id]?.paidAmount
+              const paidNum = paid !== undefined && paid !== '' ? parseFloat(paid) : null
+              return (
+                <>
+                  {hasPrice && (
+                    <div className="price-required-banner">
+                      💰 נקבע מחיר: <strong>{expectedPrice} ש"ח</strong> — יש להזין סכום ששולם
+                    </div>
+                  )}
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder={hasPrice ? `סכום ששולם (נדרש: ${expectedPrice} ש"ח)` : 'סכום ששולם (ריק = חינם)'}
+                    value={paid || ''}
+                    required={hasPrice}
+                    style={hasPrice ? { borderColor: 'var(--amber)', borderWidth: '1.5px' } : {}}
+                    onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], paidAmount: e.target.value } })}
+                  />
+                  {hasPrice && paidNum !== null && paidNum < expectedPrice && (
+                    <div className="warning-message">⚠️ סכום נמוך מהנדרש! נדרש: {expectedPrice} ש"ח | הוזן: {paidNum} ש"ח — יירשם אי-התאמה בסטטיסטיקה</div>
+                  )}
+                  {!hasPrice && (() => {
+                    const fallbackRequired = loanHistory.find(l => l.item_id === item.id && l.borrower === formInfo[item.id]?.returner)?.payment || 0
+                    if (fallbackRequired && fallbackRequired !== -1 && (paidNum ?? 0) < fallbackRequired) {
+                      return <div className="warning-message">⚠️ חובה: {fallbackRequired} ש"ח | שולם: {paidNum ?? 0} ש"ח</div>
+                    }
+                  })()}
+                </>
+              )
             })()}
 
             <div className="modal-buttons">
@@ -1200,6 +1394,7 @@ export default function Home() {
                             <th style={{ textAlign: 'center' }}>לקח</th>
                             <th style={{ textAlign: 'center' }}>החזיר</th>
                             <th style={{ textAlign: 'center' }}>פתוח</th>
+                            <th style={{ textAlign: 'center' }}>תשלום</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1212,6 +1407,21 @@ export default function Home() {
                                 {b.outstanding > 0
                                   ? <span className="badge badge-red">{b.outstanding}</span>
                                   : <span className="badge badge-green">✓</span>}
+                              </td>
+                              <td className="td-badge">
+                                {!b.paymentStatus ? (
+                                  <span style={{ color: 'var(--text-3)', fontSize: '0.75rem' }}>—</span>
+                                ) : b.paymentStatus.type === 'unpaid' ? (
+                                  <span className="badge badge-red" title={`נדרש ${b.paymentStatus.expected} ש"ח`}>לא שולם</span>
+                                ) : b.paymentStatus.type === 'mismatch' ? (
+                                  <span className="badge badge-red" title={`נדרש ${b.paymentStatus.expected} | שולם ${b.paymentStatus.paid}`}>{b.paymentStatus.paid}/{b.paymentStatus.expected} ₪</span>
+                                ) : b.paymentStatus.type === 'fixed' ? (
+                                  <span className="badge badge-green" title={`תוקן ל-${b.paymentStatus.paid} ש"ח`}>תוקן ✓</span>
+                                ) : b.paymentStatus.type === 'ignored' ? (
+                                  <span className="badge" style={{ background: 'transparent', color: 'var(--text-3)', border: '1px solid var(--border)', fontSize: '0.7rem' }}>התעלמו</span>
+                                ) : b.paymentStatus.type === 'paid' ? (
+                                  <span className="badge badge-green">{b.paymentStatus.expected} ₪ ✓</span>
+                                ) : null}
                               </td>
                             </tr>
                           ))}
@@ -1265,9 +1475,11 @@ export default function Home() {
               {!stats ? <p>אין נתונים להצגה עדיין</p> : (
                 <>
                   <div className="stats-tabs">
-                    {[['overview', 'סיכום'], ['borrowers', 'משאילים'], ['items', 'פריטים'], ['overdue', 'חריגות']].map(([id, label]) => (
+                    {[['overview', 'סיכום'], ['borrowers', 'משאילים'], ['items', 'פריטים'], ['overdue', 'בעיות']].map(([id, label]) => (
                       <button key={id} className={`stats-tab${globalStatsTab === id ? ' active' : ''}`} onClick={() => setGlobalStatsTab(id)}>
-                        {id === 'overdue' && stats.overdueLoans.length > 0 ? `⚠️ ${label}` : label}
+                        {id === 'overdue' && (stats.overdueLoans.length > 0 || paymentMismatches.some(m => m.status === 'mismatch'))
+                          ? <>{label}<span className="tab-alert-dot">{stats.overdueLoans.length + paymentMismatches.filter(m => !m.status || m.status === 'mismatch').length}</span></>
+                          : label}
                       </button>
                     ))}
                   </div>
@@ -1317,6 +1529,7 @@ export default function Home() {
                             <th style={{ textAlign: 'center' }}>השאלות</th>
                             <th style={{ textAlign: 'center' }}>לקח</th>
                             <th style={{ textAlign: 'center' }}>פתוח</th>
+                            <th style={{ textAlign: 'center' }}>תשלום</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1329,6 +1542,19 @@ export default function Home() {
                                 {b.outstanding > 0
                                   ? <span className="badge badge-red">{b.outstanding}</span>
                                   : <span className="badge badge-green">✓</span>}
+                              </td>
+                              <td className="td-badge">
+                                {!b.paymentStatus ? (
+                                  <span style={{ color: 'var(--text-3)', fontSize: '0.75rem' }}>—</span>
+                                ) : b.paymentStatus.type === 'unpaid' ? (
+                                  <span className="badge badge-red">לא שולם</span>
+                                ) : b.paymentStatus.type === 'mismatch' ? (
+                                  <span className="badge badge-red" title={`נדרש ${b.paymentStatus.expected} | שולם ${b.paymentStatus.paid}`}>חסר</span>
+                                ) : b.paymentStatus.type === 'ignored' ? (
+                                  <span className="badge" style={{ background: 'transparent', color: 'var(--text-3)', border: '1px solid var(--border)', fontSize: '0.7rem' }}>התעלמו</span>
+                                ) : b.paymentStatus.type === 'paid' ? (
+                                  <span className="badge badge-green">שולם ✓</span>
+                                ) : null}
                               </td>
                             </tr>
                           ))}
@@ -1360,8 +1586,9 @@ export default function Home() {
 
                   {globalStatsTab === 'overdue' && (
                     <div className="stats-section">
+                      {/* ── Overdue loans ── */}
                       {stats.overdueLoans.length === 0 ? (
-                        <div style={{ textAlign: 'center', padding: '2rem 0', color: 'var(--green)' }}>
+                        <div style={{ textAlign: 'center', padding: '1.5rem 0 1rem', color: 'var(--green)' }}>
                           <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>✓</div>
                           <p style={{ margin: 0, fontWeight: 700 }}>אין השאלות חריגות!</p>
                         </div>
@@ -1381,6 +1608,53 @@ export default function Home() {
                             )
                           })}
                         </>
+                      )}
+
+                      {/* ── Payment mismatches ── */}
+                      {paymentMismatches.length > 0 && (
+                        <>
+                          <p className="stats-section-title" style={{ marginTop: stats.overdueLoans.length > 0 ? '1.25rem' : '0' }}>
+                            💰 הפרשי תשלום ({paymentMismatches.filter(m => !m.status || m.status === 'mismatch').length} פתוחים)
+                          </p>
+                          {paymentMismatches.map((m, i) => (
+                            <div key={i} className="history-item mismatch-item" style={{ opacity: m.status === 'ignored' ? 0.55 : 1 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <strong>{m.borrower}</strong>
+                                <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+                                  <span style={{ fontSize: '0.78rem', color: 'var(--text-3)' }}>{m.itemName}</span>
+                                  {m.status === 'fixed' && <span className="badge badge-green">תוקן</span>}
+                                  {m.status === 'ignored' && <span className="badge" style={{ background: 'var(--bg-card)', color: 'var(--text-3)', border: '1px solid var(--border)' }}>התעלמו</span>}
+                                  {m.status === 'mismatch' && <span className="badge badge-red">הפרש</span>}
+                                </div>
+                              </div>
+                              <p style={{ margin: '0.2rem 0 0', fontSize: '0.83rem', color: 'var(--text-2)' }}>
+                                נדרש: <strong>{m.expected} ש"ח</strong>
+                                {' · '}שולם: <strong style={{ color: m.paid < m.expected ? 'var(--red)' : 'var(--amber)' }}>{m.paid} ש"ח</strong>
+                                {' · '}הפרש: <strong>{(m.paid - m.expected > 0 ? '+' : '')}{(m.paid - m.expected).toFixed(2)} ש"ח</strong>
+                              </p>
+                              {m.status !== 'ignored' && m.status !== 'fixed' && (
+                                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.55rem' }}>
+                                    <button
+                                      type="button" className="btn btn-success"
+                                      style={{ fontSize: '0.8rem', padding: '0.3rem 0.8rem' }}
+                                      onClick={() => setPaymentMismatches(prev => prev.map((x, j) => j === i ? { ...x, status: 'fixed', paid: x.expected } : x))}
+                                    >✓ שולם</button>
+                                    <button
+                                      type="button" className="btn btn-ghost"
+                                      style={{ fontSize: '0.8rem', padding: '0.3rem 0.6rem' }}
+                                      onClick={() => setPaymentMismatches(prev => prev.map((x, j) => j === i ? { ...x, status: 'ignored' } : x))}
+                                    >התעלם</button>
+                                  </div>
+                              )}
+                            </div>
+                          ))}
+                        </>
+                      )}
+
+                      {stats.overdueLoans.length === 0 && paymentMismatches.filter(m => !m.status || m.status === 'mismatch').length === 0 && (
+                        <div style={{ textAlign: 'center', padding: '1.5rem 0', color: 'var(--green)' }}>
+                          <p style={{ margin: 0, fontWeight: 700 }}>הכל תקין ✓</p>
+                        </div>
                       )}
                     </div>
                   )}
@@ -1479,6 +1753,20 @@ export default function Home() {
                   .map((b, i) => <option key={i} value={b}>{b}</option>)}
               </select>
               <input type="number" step="0.01" placeholder="סכום ששולם (ריק = חינם)" value={massPayment.paid || ''} onChange={e => setMassPayment({ ...massPayment, paid: e.target.value })} />
+              {massReturnBorrower && (() => {
+                const activePricedLoans = allLoans.filter(l => l.borrower === massReturnBorrower && (l.quantity - (l.returned_qty || 0)) > 0 && l.payment !== undefined && l.payment !== null && l.payment !== -1)
+                if (activePricedLoans.length > 0) {
+                  return (
+                    <div className="price-required-banner" style={{ marginTop: '0.5rem' }}>
+                      💰 לפריטים הבאים נקבע מחיר — יש להזין סכום ששולם:
+                      {activePricedLoans.map((l, i) => {
+                        const it = items.find(x => x.id === l.item_id)
+                        return <span key={i} className="price-badge" style={{ display: 'inline-block', margin: '0.15rem 0.25rem' }}>{it?.name || 'פריט'}: {l.payment} ש"ח</span>
+                      })}
+                    </div>
+                  )
+                }
+              })()}
               {massReturnBorrower && (
                 <>
                   <p className="section-label" style={{ marginTop: '1rem' }}>בחרו פריטים וכמויות</p>
@@ -1487,12 +1775,14 @@ export default function Home() {
                       .filter(l => l.item_id === item.id && l.borrower === massReturnBorrower && (l.quantity - (l.returned_qty || 0)) > 0)
                       .reduce((s, l) => s + (l.quantity - (l.returned_qty || 0)), 0)
                     if (borrowed <= 0) return null
+                    const pricedLoan = allLoans.find(l => l.item_id === item.id && l.borrower === massReturnBorrower && (l.quantity - (l.returned_qty || 0)) > 0 && l.payment !== undefined && l.payment !== null && l.payment !== -1)
                     return (
-                      <div key={item.id} className="mass-item">
+                      <div key={item.id} className={`mass-item${pricedLoan ? ' mass-item-has-price' : ''}`}>
                         <img src={item.image_url} alt={item.name} />
                         <div className="mass-item-info">
                           <p>{item.name}</p>
                           <p className="available">בהשאלה: {borrowed}</p>
+                          {pricedLoan && <p className="price-badge-inline">💰 {pricedLoan.payment} ש"ח</p>}
                         </div>
                         <input
                           type="number" min="0" max={borrowed} placeholder="0"
@@ -1627,9 +1917,10 @@ export default function Home() {
 
       {/* ── MOBILE BOTTOM TAB BAR ── */}
       <nav className="mobile-tab-bar">
-        <button className="tab-btn" data-tutorial="tutorial-stats" onClick={fetchAllLoans} disabled={loadingHistory}>
+        <button className="tab-btn" data-tutorial="tutorial-stats" onClick={fetchAllLoans} disabled={loadingHistory} style={{ position: 'relative' }}>
           <span className="tab-icon">📊</span>
           <span className="tab-label">סטטיסטיקה</span>
+          {globalAlertCount > 0 && <span className="alert-dot">{globalAlertCount}</span>}
         </button>
         <button className="tab-btn" data-tutorial="tutorial-send" onClick={() => { setShowShareModal(true); fetchAllLoans() }}>
           <span className="tab-icon">💬</span>

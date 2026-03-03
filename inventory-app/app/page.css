@@ -2022,3 +2022,83 @@ input, select, textarea {
     padding: 0.85rem 1.25rem calc(0.85rem + env(safe-area-inset-bottom, 0px));
   }
 }
+/* ── PRICE / PAYMENT MISMATCH STYLES ── */
+.borrower-btn-has-price {
+  border-color: var(--amber) !important;
+}
+
+.price-badge {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(251,191,36,0.15);
+  color: var(--amber);
+  font-size: 0.73rem;
+  font-weight: 700;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid rgba(251,191,36,0.3);
+  margin-right: 0.4rem;
+  flex-shrink: 0;
+}
+
+.price-required-banner {
+  font-size: 0.82rem;
+  color: var(--text-2);
+  margin-bottom: 0.25rem;
+}
+
+.mass-item-has-price {
+  border-color: var(--amber) !important;
+}
+
+.price-badge-inline {
+  font-size: 0.75rem;
+  color: var(--amber);
+  font-weight: 600;
+  margin: 0.1rem 0 0;
+}
+
+.mismatch-item {
+  border-right: 3px solid var(--amber);
+}
+
+/* ── ALERT DOT (stats button + card history button) ── */
+.alert-dot {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: var(--red);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 800;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  line-height: 1;
+}
+
+/* ── TAB ALERT DOT (inside stats tab button) ── */
+.tab-alert-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: var(--red);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 800;
+  border-radius: 999px;
+  margin-right: 5px;
+  line-height: 1;
+}
+
+.mismatch-resolved {
+  opacity: 0.55;
+}
