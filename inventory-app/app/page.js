@@ -53,6 +53,310 @@ export default function Home() {
   const [globalStatsTab, setGlobalStatsTab] = useState('overview')
   const [itemStatsTab, setItemStatsTab] = useState('overview')
 
+  // ── TEST MODE ──
+  const [testMode, setTestMode] = useState(false)
+  // Shadow copies of real data used only in test mode
+  const testItemsRef = React.useRef(null)
+  const testLoansRef = React.useRef([])   // flat list of all loans
+  let testLoanIdCounter = React.useRef(1000)
+
+  function initTestShadow(realItems) {
+    testItemsRef.current = realItems.map(i => ({ ...i }))
+    testLoansRef.current = []
+    testLoanIdCounter.current = 1000
+  }
+
+  const DEMO_ITEMS = [
+    { id: 'demo-1', name: 'מפה לבנה גדולה', total_qty: 8, available_qty: 8, image_url: '' },
+    { id: 'demo-2', name: 'כיסא מתקפל',      total_qty: 20, available_qty: 20, image_url: '' },
+    { id: 'demo-3', name: 'שולחן עגול',       total_qty: 5,  available_qty: 5,  image_url: '' },
+  ]
+
+  function enterTestMode() {
+    const base = items.length > 0 ? items : DEMO_ITEMS
+    initTestShadow(base)
+    if (items.length === 0) setItems(DEMO_ITEMS.map(i => ({ ...i })))
+    setTestMode(true)
+  }
+
+  function clearTestData() {
+    initTestShadow(items)
+    // Re-render by forcing a local items refresh from the shadow
+    setItems(testItemsRef.current.map(i => ({ ...i })))
+    setAllLoans([])
+    setLoanHistory([])
+    showMessage('נתוני הבדיקה אופסו 🧹')
+  }
+
+  function exitTestMode() {
+    setTestMode(false)
+    testItemsRef.current = null
+    testLoansRef.current = []
+    // Reload real data
+    fetch('/api/items').then(r => r.json()).then(d => setItems(d)).catch(() => {})
+    setAllLoans([])
+    setLoanHistory([])
+  }
+
+  // Fake fetch that simulates API responses using in-memory test data
+  function testFetch(url, options = {}) {
+    const method = options.method || 'GET'
+    const shadow = testItemsRef.current
+    const loans = testLoansRef.current
+
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        // GET /api/items
+        if (url === '/api/items' && method === 'GET') {
+          resolve({ ok: true, json: () => Promise.resolve(shadow.map(i => ({ ...i }))), text: () => Promise.resolve(JSON.stringify(shadow)) })
+          return
+        }
+        // POST /api/items (add item)
+        if (url === '/api/items' && method === 'POST') {
+          const fd = options.body
+          const name = fd.get('name')
+          const qty = Number(fd.get('qty'))
+          const newId = `test-${Date.now()}`
+          shadow.push({ id: newId, name, total_qty: qty, available_qty: qty, image_url: '' })
+          resolve({ ok: true, json: () => Promise.resolve({ success: true }) })
+          return
+        }
+        // PUT /api/items (edit item)
+        if (url === '/api/items' && method === 'PUT') {
+          const fd = options.body
+          const id = fd.get('id')
+          const name = fd.get('name')
+          const total_qty = Number(fd.get('total_qty'))
+          const item = shadow.find(i => i.id === id)
+          if (item) {
+            const loaned = item.total_qty - item.available_qty
+            item.name = name
+            item.total_qty = total_qty
+            item.available_qty = total_qty - loaned
+          }
+          resolve({ ok: true, json: () => Promise.resolve({ success: true }) })
+          return
+        }
+        // POST /api/loans (loan)
+        if (url === '/api/loans' && method === 'POST') {
+          const body = JSON.parse(options.body)
+          const item = shadow.find(i => i.id === body.item_id)
+          if (item && item.available_qty >= body.quantity) {
+            item.available_qty -= body.quantity
+            const loan = { id: String(testLoanIdCounter.current++), item_id: body.item_id, borrower: body.borrower, quantity: body.quantity, returned_qty: 0, admin: body.admin, payment: body.price, date_taken: new Date().toISOString() }
+            loans.push(loan)
+            resolve({ ok: true, json: () => Promise.resolve({ success: true }) })
+          } else {
+            resolve({ ok: false, json: () => Promise.resolve({ error: 'אין מספיק יחידות זמינות' }) })
+          }
+          return
+        }
+        // POST /api/return
+        if (url === '/api/return' && method === 'POST') {
+          const body = JSON.parse(options.body)
+          const item = shadow.find(i => i.id === body.item_id)
+          let remaining = body.quantity
+          for (const loan of loans) {
+            if (loan.item_id === body.item_id && loan.borrower === body.returner) {
+              const out = loan.quantity - (loan.returned_qty || 0)
+              if (out > 0 && remaining > 0) {
+                const ret = Math.min(out, remaining)
+                loan.returned_qty = (loan.returned_qty || 0) + ret
+                remaining -= ret
+              }
+            }
+          }
+          if (item) item.available_qty += (body.quantity - remaining)
+          resolve({ ok: true, json: () => Promise.resolve({ success: true }) })
+          return
+        }
+        // GET /api/loans/:id
+        if (url.startsWith('/api/loans/') && !url.endsWith('/all') && method === 'GET') {
+          const itemId = url.replace('/api/loans/', '')
+          const filtered = loans.filter(l => l.item_id === itemId)
+          resolve({ ok: true, json: () => Promise.resolve(filtered) })
+          return
+        }
+        // GET /api/loans/all
+        if (url === '/api/loans/all' && method === 'GET') {
+          resolve({ ok: true, json: () => Promise.resolve([...loans]) })
+          return
+        }
+        resolve({ ok: false, json: () => Promise.resolve({ error: 'לא נתמך במצב בדיקה' }) })
+      }, 60)
+    })
+  }
+
+  // Unified fetch: use testFetch in test mode, real fetch otherwise
+  const apiFetch = React.useCallback((url, options) => {
+    return testMode ? testFetch(url, options) : fetch(url, options)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [testMode])
+
+  // ── TUTORIAL ──
+  const TUTORIAL_STEPS = [
+    { id: 'welcome',   target: null,              title: 'ברוכים הבאים לגמ״ח עיר דוד', body: 'הדרכה קצרה תעזור לכם להכיר את המערכת. כל הפעולות בהדרכה מתבצעות במצב בדיקה — שום פעולה לא תישמר.', icon: '👋' },
+    { id: 'add-item',  target: 'tutorial-add',    title: 'הוספת פריט חדש',   body: 'לחצו על "הוספה" להוספת פריט למלאי. ניתן לקבוע שם, כמות ותמונה.',                                            icon: '➕' },
+    { id: 'loan',      target: 'tutorial-loan',   title: 'השאלת פריט',       body: 'לחצו על "📤 השאלה" בכרטיסיית הפריט, מלאו את שם הלווה, הכמות והמאשר/ת.',                                   icon: '📤' },
+    { id: 'return',    target: 'tutorial-return', title: 'החזרת פריט',       body: 'לחצו על "📥 החזרה" לרישום החזרה. המערכת מציגה אוטומטית את רשימת הלווים הפעילים לפריט זה.',              icon: '📥' },
+    { id: 'list-mode', target: 'tutorial-list',   title: 'מצב רשימה',        body: 'השאילו או החזירו מספר פריטים בפעולה אחת. אידיאלי לאירועים עם ציוד רב.',                                    icon: '✅' },
+    { id: 'send',      target: 'tutorial-send',   title: 'שליחה בוואטסאפ',   body: 'בחרו לווה מהרשימה ותיפתח הודעה מוכנה בוואטסאפ עם פירוט כל הפריטים שלו — לשליחה ישירה.',              icon: '💬' },
+    { id: 'stats',     target: 'tutorial-stats',  title: 'סטטיסטיקה',        body: 'צפו בנתוני ההשאלות, עקבו אחר הלווים הפעילים, וזהו פריטים שלא הוחזרו בזמן.',                             icon: '📊' },
+    { id: 'test-mode', target: 'tutorial-test',   title: 'מצב בדיקה',        body: 'מצב בדיקה מאפשר לנסות את כל הפעולות מבלי שדבר יישמר. כדי להיכנס: פתחו סטטיסטיקה ← לחצו "כניסה למצב בדיקה" בתחתית.', icon: '🧪' },
+    { id: 'done',      target: null,              title: 'הכל מוכן!',         body: 'כל הכבוד! כעת תוכלו להשתמש במערכת. להפעלה מחדש של ההדרכה — לחצו על 🎓 בסרגל הניווט.',             icon: '🎓' },
+  ]
+
+  const [tutorialActive, setTutorialActive] = useState(false)
+  const [tutorialStep, setTutorialStep] = useState(0)
+  const [tutorialVisible, setTutorialVisible] = useState(false) // controls CSS animation
+  // Live spotlight rect tracked via rAF
+  const [spotlightRect, setSpotlightRect] = useState(null)
+  const rafRef = React.useRef(null)
+  // Viewport size — updated on resize so SVG always fits screen correctly
+  const [vpSize, setVpSize] = useState({ w: 0, h: 0 })
+  useEffect(() => {
+    const update = () => {
+      const vp = window.visualViewport
+      setVpSize({ w: vp ? vp.width : window.innerWidth, h: vp ? vp.height : window.innerHeight })
+    }
+    update()
+    window.addEventListener('resize', update)
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('resize', update)
+      if (window.visualViewport) window.visualViewport.removeEventListener('resize', update)
+    }
+  }, [])
+
+  // rAF loop: continuously tracks target element position so spotlight stays accurate
+  // Picks the VISIBLE element when multiple share the same data-tutorial (e.g. desktop+mobile buttons)
+  function startSpotlightTracking(targetId) {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    if (!targetId) { setSpotlightRect(null); return }
+    let missCount = 0
+    const track = () => {
+      const els = document.querySelectorAll('[data-tutorial="' + targetId + '"]')
+      // Find the first one that is actually visible (non-zero size, not display:none)
+      let found = null
+      for (const el of els) {
+        const r = el.getBoundingClientRect()
+        if (r.width > 0 && r.height > 0) { found = { el, r }; break }
+      }
+      if (found) {
+        missCount = 0
+        const { r } = found
+        const pad = 10
+        setSpotlightRect({ x: r.left - pad, y: r.top - pad, w: r.width + pad * 2, h: r.height + pad * 2 })
+        rafRef.current = requestAnimationFrame(track)
+      } else {
+        missCount++
+        if (missCount < 8) {
+          rafRef.current = requestAnimationFrame(track)
+        } else {
+          setSpotlightRect(null)
+          rafRef.current = null
+        }
+      }
+    }
+    rafRef.current = requestAnimationFrame(track)
+  }
+
+  function stopSpotlightTracking() {
+    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
+    setSpotlightRect(null)
+  }
+
+  function startTutorial() {
+    closeAllModals()
+    if (!testMode) enterTestMode()
+    setTutorialStep(0)
+    setTutorialActive(true)
+    // Trigger CSS entrance on next frame
+    requestAnimationFrame(() => requestAnimationFrame(() => setTutorialVisible(true)))
+  }
+
+  function endTutorial() {
+    setTutorialVisible(false)
+    stopSpotlightTracking()
+    setTimeout(() => { setTutorialActive(false); setTutorialStep(0) }, 280)
+    try { localStorage.setItem('tutorialDone', '1') } catch {}
+  }
+
+  function tutorialGoTo(next) {
+    setTutorialVisible(false)
+    stopSpotlightTracking()
+    setTimeout(() => {
+      setTutorialStep(next)
+      requestAnimationFrame(() => requestAnimationFrame(() => setTutorialVisible(true)))
+    }, 200)
+  }
+
+  function tutorialNext() {
+    const next = tutorialStep + 1
+    if (next >= TUTORIAL_STEPS.length) { endTutorial(); return }
+    tutorialGoTo(next)
+  }
+
+  function tutorialPrev() {
+    if (tutorialStep === 0) return
+    tutorialGoTo(tutorialStep - 1)
+  }
+
+  // When step changes, scroll target into view and start tracking
+  useEffect(() => {
+    if (!tutorialActive) return
+    const step = TUTORIAL_STEPS[tutorialStep]
+    if (!step.target) { stopSpotlightTracking(); return }
+    // Scroll first, then start tracking after scroll settles
+    const el = document.querySelector('[data-tutorial="' + step.target + '"]')
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    // Wait for scroll to settle before tracking
+    const t = setTimeout(() => startSpotlightTracking(step.target), 400)
+    return () => clearTimeout(t)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tutorialActive, tutorialStep])
+
+  // Cleanup rAF on unmount
+  useEffect(() => () => stopSpotlightTracking(), [])
+
+  // Fake-loan first item when tutorial reaches 'return' step so button is visible; roll back on leave
+  const [tutorialFakeLoaned, setTutorialFakeLoaned] = useState(false)
+  useEffect(() => {
+    if (!tutorialActive) return
+    const step = TUTORIAL_STEPS[tutorialStep]
+    if (step.id === 'return' && !tutorialFakeLoaned && testItemsRef.current && testItemsRef.current.length > 0) {
+      const first = testItemsRef.current[0]
+      if (first.available_qty > 0) {
+        first.available_qty -= 1
+        setItems(testItemsRef.current.map(i => ({ ...i })))
+        setTutorialFakeLoaned(true)
+      }
+    } else if (step.id !== 'return' && tutorialFakeLoaned && testItemsRef.current && testItemsRef.current.length > 0) {
+      const first = testItemsRef.current[0]
+      first.available_qty = Math.min(first.total_qty, first.available_qty + 1)
+      setItems(testItemsRef.current.map(i => ({ ...i })))
+      setTutorialFakeLoaned(false)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tutorialActive, tutorialStep])
+
+  // Auto-start on first visit — wait until items have loaded so spotlight targets exist
+  const tutorialPendingRef = React.useRef(false)
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem('tutorialDone')) tutorialPendingRef.current = true
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => {
+    if (tutorialPendingRef.current && !loadingItems) {
+      tutorialPendingRef.current = false
+      // Small extra delay so DOM fully paints before we start tracking
+      setTimeout(() => startTutorial(), 500)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadingItems])
+
 
   function closeAllModals() {
     setShowAddModal(false)
@@ -76,7 +380,7 @@ export default function Home() {
     async function loadItems() {
       setLoadingItems(true)
       try {
-        const res = await fetch('/api/items')
+        const res = await apiFetch('/api/items')
         const text = await res.text()
         const data = text ? JSON.parse(text) : []
         if (data.error) showMessage(`שגיאה בטעינת פריטים: ${data.error}`)
@@ -115,10 +419,10 @@ export default function Home() {
 
   async function handleAddItem(e) {
     e.preventDefault()
-    if (!newItem.image) { showMessage('יש לבחור תמונה ❌'); return }
-    if (!newItem.name.trim()) { showMessage('יש להזין שם פריט ❌'); return }
+    if (!newItem.image) { showMessage('נא לבחור תמונה ❌'); return }
+    if (!newItem.name.trim()) { showMessage('נא להזין שם לפריט ❌'); return }
     const addQty = Number(newItem.qty)
-    if (!addQty || addQty <= 0) { showMessage('כמות חייבת להיות גדולה מ-0 ❌'); return }
+    if (!addQty || addQty <= 0) { showMessage('הכמות חייבת להיות גדולה מ-0 ❌'); return }
     setLoadingAction(true)
     try {
       const compressed = await compressImage(newItem.image)
@@ -126,13 +430,13 @@ export default function Home() {
       formData.append('name', newItem.name)
       formData.append('qty', newItem.qty)
       formData.append('image', compressed, newItem.image.name)
-      const res = await fetch('/api/items', { method: 'POST', body: formData })
+      const res = await apiFetch('/api/items', { method: 'POST', body: formData })
       const data = await res.json()
       if (res.ok && data.success) {
         showMessage('פריט נוסף ✅')
         setNewItem({ name: '', qty: '', image: null })
         setShowAddModal(false)
-        setItems(await (await fetch('/api/items')).json())
+        setItems(await (await apiFetch('/api/items')).json())
       } else showMessage(`הוספת פריט נכשלה: ${data.error || 'שגיאה'} ❌`)
     } catch (err) {
       showMessage(`שגיאה בהוספת פריט: ${err.message} ❌`)
@@ -144,7 +448,7 @@ export default function Home() {
   async function handleEditItem(item_id) {
     const item = items.find(i => i.id === item_id)
     const newTotalQty = Number(editItem.total_qty)
-    if (!newTotalQty || newTotalQty <= 0) { showMessage('כמות חייבת להיות גדולה מ-0 ❌'); return }
+    if (!newTotalQty || newTotalQty <= 0) { showMessage('הכמות חייבת להיות גדולה מ-0 ❌'); return }
     const currentlyLoaned = item ? (item.total_qty - item.available_qty) : 0
     if (newTotalQty < currentlyLoaned) {
       showMessage(`לא ניתן להגדיר כמות נמוכה מהמושאל כרגע (${currentlyLoaned}) ❌`); return
@@ -159,12 +463,12 @@ export default function Home() {
         const compressed = await compressImage(editItem.image)
         formData.append('image', compressed, editItem.image.name)
       }
-      const res = await fetch('/api/items', { method: 'PUT', body: formData })
+      const res = await apiFetch('/api/items', { method: 'PUT', body: formData })
       const data = await res.json()
       if (res.ok && data.success) {
         showMessage('פריט עודכן ✅')
         setShowEditModal(null)
-        setItems(await (await fetch('/api/items')).json())
+        setItems(await (await apiFetch('/api/items')).json())
       } else showMessage(`עריכת פריט נכשלה: ${data.error || 'שגיאה'} ❌`)
     } catch (err) {
       showMessage(`שגיאה בעריכת פריט: ${err.message} ❌`)
@@ -176,13 +480,13 @@ export default function Home() {
   async function handleLoan(item_id) {
     const info = formInfo[item_id]
     const item = items.find(i => i.id === item_id)
-    if (!info?.borrower || !info?.qty || !info?.admin) { showMessage('מלא את כל השדות ❌'); return }
+    if (!info?.borrower || !info?.qty || !info?.admin) { showMessage('יש למלא את כל השדות ❌'); return }
     const qty = Number(info.qty)
-    if (!qty || qty <= 0) { showMessage('כמות חייבת להיות גדולה מ-0 ❌'); return }
+    if (!qty || qty <= 0) { showMessage('הכמות חייבת להיות גדולה מ-0 ❌'); return }
     if (qty > item.available_qty) { showMessage(`לא ניתן להשאיל יותר מהזמין (${item.available_qty}) ❌`); return }
     setLoadingAction(true)
     try {
-      const res = await fetch('/api/loans', {
+      const res = await apiFetch('/api/loans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ item_id, borrower: info.borrower, quantity: qty, admin: info.admin, price: info.payment !== undefined && info.payment !== '' ? Number(info.payment) : -1 })
@@ -193,7 +497,7 @@ export default function Home() {
         saveBorrowerInfo(info.borrower, info.admin)
         setFormInfo({ ...formInfo, [item_id]: {} })
         setShowLoanModal(null)
-        setItems(await (await fetch('/api/items')).json())
+        setItems(await (await apiFetch('/api/items')).json())
       } else showMessage(`השאלת פריט נכשלה: ${data.error || 'שגיאה'} ❌`)
     } catch (err) {
       showMessage(`שגיאה בהשאלת פריט: ${err.message} ❌`)
@@ -204,9 +508,9 @@ export default function Home() {
 
   async function handleReturn(item_id) {
     const info = formInfo[item_id]
-    if (!info?.returner || !info?.returnQty) { showMessage('מלא את כל השדות ❌'); return }
+    if (!info?.returner || !info?.returnQty) { showMessage('יש למלא את כל השדות ❌'); return }
     const returnQty = Number(info.returnQty)
-    if (!returnQty || returnQty <= 0) { showMessage('כמות חייבת להיות גדולה מ-0 ❌'); return }
+    if (!returnQty || returnQty <= 0) { showMessage('הכמות חייבת להיות גדולה מ-0 ❌'); return }
     const outstanding = loanHistory
       .filter(l => l.item_id === item_id && l.borrower === info.returner)
       .reduce((s, l) => s + (l.quantity - (l.returned_qty || 0)), 0)
@@ -215,7 +519,7 @@ export default function Home() {
     }
     setLoadingAction(true)
     try {
-      const res = await fetch('/api/return', {
+      const res = await apiFetch('/api/return', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ item_id, returner: info.returner, quantity: returnQty, price: info.paidAmount !== undefined && info.paidAmount !== '' ? Number(info.paidAmount) : -1 })
@@ -225,7 +529,7 @@ export default function Home() {
         showMessage(`פריט הוחזר על ידי ${info.returner} ✅`)
         setFormInfo({ ...formInfo, [item_id]: {} })
         setShowReturnModal(null)
-        setItems(await (await fetch('/api/items')).json())
+        setItems(await (await apiFetch('/api/items')).json())
       } else showMessage(`החזרת פריט נכשלה: ${data.error || 'שגיאה'} ❌`)
     } catch (err) {
       showMessage(`שגיאה בהחזרת פריט: ${err.message} ❌`)
@@ -237,7 +541,7 @@ export default function Home() {
   async function fetchLoanHistory(item_id) {
     setLoadingHistory(true)
     try {
-      const res = await fetch(`/api/loans/${item_id}`)
+      const res = await apiFetch(`/api/loans/${item_id}`)
       const data = await res.json()
       setLoanHistory(Array.isArray(data) ? data : (data.loans || []))
       setShowInfoModal(item_id)
@@ -251,7 +555,7 @@ export default function Home() {
   async function fetchAllLoans() {
     setLoadingHistory(true)
     try {
-      const res = await fetch('/api/loans/all')
+      const res = await apiFetch('/api/loans/all')
       const data = await res.json()
       setAllLoans(data)
       setShowGlobalHistory(true)
@@ -361,7 +665,7 @@ export default function Home() {
     setFormInfo(prev => ({ ...prev, [item_id]: { returner: '', returnQty: '' } }))
     setLoadingHistory(true)
     try {
-      const res = await fetch(`/api/loans/${item_id}`)
+      const res = await apiFetch(`/api/loans/${item_id}`)
       const data = await res.json()
       const loans = Array.isArray(data) ? data : (data.loans || [])
       setLoanHistory(loans)
@@ -390,7 +694,7 @@ export default function Home() {
   async function processMassLoans() {
     const selectedItems_pre = Object.entries(massSelection).filter(([, q]) => q > 0)
     if (!massBorrower || !massAdmin || selectedItems_pre.length === 0) {
-      showMessage('בחר משאיל, אדמין ופריטים לפחות ❌'); return
+      showMessage('יש לבחור לווה, מאשר ולפחות פריט אחד ❌'); return
     }
     setLoadingAction(true)
     try {
@@ -404,14 +708,14 @@ export default function Home() {
         }
       }
       for (const { item_id, quantity } of selectedItems) {
-        const res = await fetch('/api/loans', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id, borrower: massBorrower, quantity, admin: massAdmin, price: massPayment.amount !== undefined && massPayment.amount !== '' ? Number(massPayment.amount) : -1 }) })
+        const res = await apiFetch('/api/loans', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id, borrower: massBorrower, quantity, admin: massAdmin, price: massPayment.amount !== undefined && massPayment.amount !== '' ? Number(massPayment.amount) : -1 }) })
         const data = await res.json()
         if (!res.ok || !data.success) throw new Error(`שגיאה בפריט ${items.find(i => i.id === item_id)?.name}: ${data.error}`)
       }
       showMessage(`${selectedItems.length} פריטים הושאלו ל${massBorrower} ✅`)
       saveBorrowerInfo(massBorrower, massAdmin)
       setShowMassMode(false); setMassMode(null); setMassSelection({}); setMassBorrower(''); setMassAdmin('')
-      setItems(await (await fetch('/api/items')).json())
+      setItems(await (await apiFetch('/api/items')).json())
     } catch (err) {
       showMessage(`שגיאה בהשאלה: ${err.message} ❌`)
     } finally {
@@ -421,7 +725,7 @@ export default function Home() {
 
   async function processMassReturns() {
     if (!massReturnBorrower || Object.values(massReturnQty).every(v => v <= 0)) {
-      showMessage('בחר משאיל ופריטים בכמויות ❌'); return
+      showMessage('יש לבחור לווה ולהגדיר כמויות ❌'); return
     }
     setLoadingAction(true)
     try {
@@ -438,13 +742,13 @@ export default function Home() {
         }
       }
       for (const { item_id, quantity } of selectedItems) {
-        const res = await fetch('/api/return', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id, returner: massReturnBorrower, quantity, price: massPayment.paid !== undefined && massPayment.paid !== '' ? Number(massPayment.paid) : -1 }) })
+        const res = await apiFetch('/api/return', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id, returner: massReturnBorrower, quantity, price: massPayment.paid !== undefined && massPayment.paid !== '' ? Number(massPayment.paid) : -1 }) })
         const data = await res.json()
         if (!res.ok || !data.success) throw new Error(`שגיאה בהחזרה ${items.find(i => i.id === item_id)?.name}: ${data.error}`)
       }
       showMessage(`${selectedItems.length} פריטים הוחזרו ✅`)
       setShowMassMode(false); setMassMode(null); setMassSelection({}); setMassReturnBorrower(''); setMassReturnQty({})
-      setItems(await (await fetch('/api/items')).json())
+      setItems(await (await apiFetch('/api/items')).json())
     } catch (err) {
       showMessage(`שגיאה בהחזרה: ${err.message} ❌`)
     } finally {
@@ -456,7 +760,7 @@ export default function Home() {
     setMassMode('return')
     setLoadingHistory(true)
     try {
-      const res = await fetch('/api/loans/all')
+      const res = await apiFetch('/api/loans/all')
       setAllLoans(await res.json() || [])
     } catch (err) {
       showMessage(`שגיאה בטעינת ההשאלות: ${err.message}`)
@@ -476,81 +780,101 @@ export default function Home() {
   function exportGlobalStats() {
     const stats = calculateGlobalStats()
     if (!stats) { showMessage('אין נתונים לייצוא ❌'); return }
-    const date = new Date().toLocaleDateString('he-IL')
-    let txt = `📊 סטטיסטיקה כללית — גמ"ח עיר דוד\n${date}\n`
-    txt += `${'─'.repeat(28)}\n`
-    txt += `סה"כ השאלות: ${stats.totalLoans}\n`
-    txt += `סה"כ יחידות שהושאלו: ${stats.totalBorrowed}\n`
-    txt += `סה"כ יחידות שהוחזרו: ${stats.totalReturned}\n`
-    txt += `עדיין בהשאלה: ${stats.totalOutstanding}\n`
-    txt += `אחוז החזרה: ${stats.returnRate}%\n`
-    txt += `תפוסה ממוצעת: ${stats.utilizationPct}%\n`
+    const date = new Date().toLocaleDateString('he-IL', { day: 'numeric', month: 'long', year: 'numeric' })
+    const sep = '━'.repeat(24)
+    let txt = `📊 *גמ"ח עיר דוד — סיכום כללי*\n📅 ${date}\n${sep}\n\n`
+
+    txt += `📈 *נתוני פעילות*\n`
+    txt += `  סה"כ השאלות: ${stats.totalLoans}\n`
+    txt += `  יחידות שהושאלו: ${stats.totalBorrowed}\n`
+    txt += `  יחידות שהוחזרו: ${stats.totalReturned}\n`
+    txt += `  עדיין בהשאלה: ${stats.totalOutstanding}\n`
+    txt += `  אחוז החזרה: ${stats.returnRate}%\n`
+    txt += `  תפוסה ממוצעת: ${stats.utilizationPct}%\n`
+
     if (stats.overdueLoans.length > 0) {
-      txt += `\n⚠️ פריטים באיחור (${stats.overdueLoans.length}):\n`
+      txt += `\n⚠️ *פריטים באיחור — ${stats.overdueLoans.length}*\n`
       stats.overdueLoans.forEach(l => {
         const item = items.find(i => i.id === l.item_id)
-        txt += `  • ${l.borrower} — ${item?.name || 'פריט'}: ${l.outstanding} יח׳ (${l.days} ימים)\n`
+        txt += `  • ${l.borrower} | ${item?.name || 'פריט'} | ${l.outstanding} יח׳ | ${l.days} ימים\n`
       })
     }
-    txt += `\n👥 משאילים פעילים (${Object.keys(stats.currentlyBorrowing).length}):\n`
-    Object.entries(stats.currentlyBorrowing).forEach(([borrower, loans]) => {
-      txt += `  ${borrower}:\n`
-      loans.forEach(l => {
-        const item = items.find(i => i.id === l.item_id)
-        txt += `    • ${item?.name || 'פריט'}: ${l.quantity} יח׳ (${l.days} ימים${l.overdue ? ' ⚠️' : ''})\n`
+
+    const activeBorrowers = Object.keys(stats.currentlyBorrowing)
+    if (activeBorrowers.length > 0) {
+      txt += `\n👥 *לווים פעילים — ${activeBorrowers.length}*\n`
+      activeBorrowers.forEach(borrower => {
+        txt += `\n  👤 ${borrower}\n`
+        stats.currentlyBorrowing[borrower].forEach(l => {
+          const item = items.find(i => i.id === l.item_id)
+          const flag = l.overdue ? ' ⚠️' : ''
+          txt += `     • ${item?.name || 'פריט'}: ${l.quantity} יח׳ (${l.days} ימים)${flag}\n`
+        })
       })
-    })
-    txt += `\n📦 ניצולת פריטים:\n`
+    }
+
+    txt += `\n📦 *ניצולת מלאי*\n`
     stats.itemUtil.forEach(i => {
-      txt += `  ${i.name}: ${i.loaned}/${i.total_qty} (${i.pct}%)\n`
+      const bar = '█'.repeat(Math.round(i.pct / 10)) + '░'.repeat(10 - Math.round(i.pct / 10))
+      txt += `  ${i.name}\n  ${bar} ${i.pct}% (${i.loaned}/${i.total_qty})\n`
     })
+
+    txt += `\n${sep}\nגמ"ח עיר דוד 🏡`
     window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, '_blank')
     showMessage('הדוח נשלח ✅')
   }
 
-  // This version takes the item object (matching the JSX call site) and builds a clean string.
   function exportItemStats(item) {
     const stats = calculateItemStats(loanHistory)
     if (!stats) { showMessage('אין נתונים לייצוא ❌'); return }
-    const date = new Date().toLocaleDateString('he-IL')
-    let txt = `📦 סטטיסטיקת פריט: ${item.name}\n${date}\n`
-    txt += `${'─'.repeat(28)}\n`
-    txt += `סה"כ השאלות: ${stats.totalLoans}\n`
-    txt += `הושאל: ${stats.totalBorrowed} | הוחזר: ${stats.totalReturned} | פתוח: ${stats.totalOutstanding}\n`
-    txt += `אחוז החזרה: ${stats.returnRate}%\n`
-    txt += `ממוצע ימי השאלה: ${stats.avgDaysOut}\n`
-    if (stats.overdueCount > 0) txt += `⚠️ השאלות באיחור: ${stats.overdueCount}\n`
-    txt += `\n👤 לפי משאיל:\n`
-    stats.borrowers.forEach(b => {
-      txt += `  ${b.name}: ${b.borrowed} יח׳ הושאלו, ${b.returned} הוחזרו, ${b.outstanding} פתוח\n`
-    })
-    txt += `\n📜 יומן השאלות:\n`
-    stats.loanLog.forEach(l => {
-      const d = new Date(l.date_taken).toLocaleDateString('he-IL')
-      const status = l.outstanding === 0 ? 'הוחזר' : l.overdue ? '⚠️ איחור' : 'פתוח'
-      txt += `  ${d} — ${l.borrower}: ${l.quantity} יח׳ [${status}]\n`
-    })
+    const date = new Date().toLocaleDateString('he-IL', { day: 'numeric', month: 'long', year: 'numeric' })
+    const sep = '━'.repeat(24)
+    let txt = `📦 *${item.name}*\n📅 ${date}\n${sep}\n\n`
+
+    txt += `📈 *סיכום*\n`
+    txt += `  סה"כ השאלות: ${stats.totalLoans}\n`
+    txt += `  הושאל: ${stats.totalBorrowed} יח׳  |  הוחזר: ${stats.totalReturned} יח׳  |  פתוח: ${stats.totalOutstanding} יח׳\n`
+    txt += `  אחוז החזרה: ${stats.returnRate}%\n`
+    txt += `  ממוצע ימי השאלה: ${stats.avgDaysOut}\n`
+    if (stats.overdueCount > 0) txt += `  ⚠️ השאלות באיחור: ${stats.overdueCount}\n`
+
+    if (stats.borrowers.length > 0) {
+      txt += `\n👥 *לפי לווה*\n`
+      stats.borrowers.forEach(b => {
+        const outstanding = b.outstanding > 0 ? ` | פתוח: ${b.outstanding} ⚠️` : ' | הוחזר הכל ✓'
+        txt += `  • ${b.name}: ${b.borrowed} הושאלו, ${b.returned} הוחזרו${outstanding}\n`
+      })
+    }
+
+    if (stats.loanLog.length > 0) {
+      txt += `\n📜 *יומן השאלות*\n`
+      stats.loanLog.forEach(l => {
+        const d = new Date(l.date_taken).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric', year: '2-digit' })
+        const status = l.outstanding === 0 ? '✓ הוחזר' : l.overdue ? '⚠️ איחור' : '⏳ פתוח'
+        txt += `  ${d}  |  ${l.borrower}  |  ${l.quantity} יח׳  |  ${status}\n`
+      })
+    }
+
+    txt += `\n${sep}\nגמ"ח עיר דוד 🏡`
     window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, '_blank')
     showMessage('הדוח נשלח ✅')
   }
 
   // never called from anywhere in the JSX.
 
-  function handleShare() {
-    if (!selectedShareBorrower) { showMessage('אנא בחר משאיל'); return }
-    if (!sharePhoneNumber.trim()) { showMessage('אנא הכנס מספר טלפון'); return }
-    const borrowerLoans = allLoans.filter(l => l.borrower === selectedShareBorrower && (l.quantity - (l.returned_qty || 0)) > 0)
-    if (borrowerLoans.length === 0) { showMessage('אין פריטים בהשאלה לאדם זה'); return }
+  function handleShare(borrowerName) {
+    const name = borrowerName || selectedShareBorrower
+    if (!name) { showMessage('נא לבחור לווה'); return }
+    const borrowerLoans = allLoans.filter(l => l.borrower === name && (l.quantity - (l.returned_qty || 0)) > 0)
+    if (borrowerLoans.length === 0) { showMessage('לאדם זה אין פריטים בהשאלה כרגע'); return }
     const itemsList = borrowerLoans.map(loan => {
       const item = items.find(i => i.id === loan.item_id)
       return `• ${item?.name || 'פריט'}: ${loan.quantity - (loan.returned_qty || 0)} יח׳`
     }).join('\n')
-    const messageText = `שלום ${selectedShareBorrower} זוהי הודעה אוטומטית\n\nלהלן רשימת הפריטים שלקחת מהגמ"ח:\n\n${itemsList}\n\nלתשומת לבכם!\n* אין לקיים פעילויות יצירה ישירות על המפות, אלא לפרוס ניילון.\n* הדלקת נרות רק על מרכז שולחן ולא ישירות על המפה. טפטופי חלב הורסים את המפות.\n* מפות יש לכבס ולייבש היטב היטב! מפות לחות מעלות עובש ומתקלקלות.\n\nשמחנו להיות חלק מהשמחה שלכם`
-    const clean = sharePhoneNumber.replace(/[^0-9+]/g, '')
-    const formatted = clean.startsWith('+') ? clean : `+972${clean.replace(/^0/, '')}`
-    window.open(`https://wa.me/${formatted.replace('+', '')}?text=${encodeURIComponent(messageText)}`, '_blank')
+    const messageText = `שלום ${name}, זוהי הודעה אוטומטית מגמ"ח עיר דוד.\n\nלהלן רשימת הפריטים שבהשאלתך:\n\n${itemsList}\n\nלתשומת לבך:\n• אין לבצע פעילויות יצירה ישירות על המפות — יש לפרוס ניילון.\n• הדלקת נרות רק במרכז השולחן, לא ישירות על המפה.\n• מפות יש לכבס ולייבש היטב; מפות לחות עלולות להתעפש.\n\nשמחנו להיות חלק מהשמחה שלכם 🎉`
+    window.open(`https://wa.me/?text=${encodeURIComponent(messageText)}`, '_blank')
     closeAllModals()
-    showMessage('הודעה נשלחה ל-WhatsApp')
+    showMessage('נפתח וואטסאפ לשליחה ✅')
   }
 
   return (
@@ -558,24 +882,38 @@ export default function Home() {
       {/* ── HEADER ── */}
       <header className="app-header">
         <h1 className="app-title">גמ"ח <span>עיר דוד</span></h1>
+        <p className="app-tagline">נוצר ע"י איתמר קצובר</p>
         <div className="header-actions">
-          <button className="hdr-btn" onClick={fetchAllLoans} disabled={loadingHistory} title="סטטיסטיקה">
+          <button className="hdr-btn" data-tutorial="tutorial-stats" onClick={fetchAllLoans} disabled={loadingHistory} title="סטטיסטיקה">
             <span className="icon">📊</span><span>סטטיסטיקה</span>
           </button>
-          <button className="hdr-btn" onClick={() => { setShowShareModal(true); fetchAllLoans() }} title="WhatsApp">
+          <button className="hdr-btn" data-tutorial="tutorial-send" onClick={() => { setShowShareModal(true); fetchAllLoans() }} title="WhatsApp">
             <span className="icon">💬</span><span>שלח</span>
           </button>
-          <button className="hdr-btn" onClick={() => setShowMassMode(true)} title="מצב המוני">
-            <span className="icon">⚡</span><span>המוני</span>
+          <button className="hdr-btn" onClick={() => setShowMassMode(true)} data-tutorial="tutorial-list" title="מצב רשימה">
+            <span className="icon">✅</span><span>רשימה</span>
           </button>
-          <button className="hdr-btn primary" onClick={() => setShowAddModal(true)} disabled={loadingAction || loadingItems}>
+          <button className="hdr-btn primary" data-tutorial="tutorial-add" onClick={() => setShowAddModal(true)} disabled={loadingAction || loadingItems}>
             <span className="icon">＋</span><span>פריט חדש</span>
           </button>
+          <button className="hdr-btn hdr-btn-tutorial" onClick={startTutorial} title="הדרכה">
+            <span className="icon">🎓</span><span>הדרכה</span>
+          </button>
+
         </div>
       </header>
 
       {/* ── MESSAGE ── */}
       {message && <div className="message" onClick={() => setMessage('')} style={{ cursor: 'pointer' }}>{message}</div>}
+
+      {/* ── TEST MODE BANNER ── */}
+      {testMode && (
+        <div className="test-mode-banner">
+          <span>🧪 מצב בדיקה פעיל — אין שמירה</span>
+          <button className="test-clear-btn" onClick={clearTestData}>🧹 אפס</button>
+          <button className="test-exit-btn" onClick={exitTestMode}>✕ צא</button>
+        </div>
+      )}
 
       {/* ── GLOBAL LOADING OVERLAY ── */}
       {(loadingItems || loadingAction || loadingHistory) && (
@@ -584,7 +922,7 @@ export default function Home() {
             <span /><span /><span /><span /><span />
           </div>
           <div className="loader-label">
-            {loadingAction ? 'מבצע פעולה' : loadingHistory ? 'טוען נתונים' : 'טוען פריטים'}
+            {loadingAction ? 'מבצע...' : loadingHistory ? 'טוען...' : 'טוען...'}
           </div>
         </div>
       )}
@@ -595,7 +933,7 @@ export default function Home() {
           <div className="search-bar">
             <input
               type="text"
-              placeholder="חיפוש פריטים..."
+              placeholder="חיפוש..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               className="search-input"
@@ -605,7 +943,7 @@ export default function Home() {
           <div className="grid">
             {items
               .filter(item => item.name.toLowerCase().includes(searchQuery.toLowerCase()))
-              .map(item => (
+              .map((item, filteredIdx) => (
                 <div key={item.id} className="card">
                   <img src={item.image_url} alt={item.name} />
 
@@ -627,9 +965,14 @@ export default function Home() {
                     {item.total_qty} זמין
                   </p>
 
+                  {/* Zero-size tutorial anchor for return — no layout impact */}
+                  {filteredIdx === 0 && (
+                    <span data-tutorial="tutorial-return" style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden', pointerEvents: 'none' }} aria-hidden="true" />
+                  )}
                   <div className="card-actions">
                     <button
                       className="btn btn-blue"
+                      data-tutorial={filteredIdx === 0 ? 'tutorial-loan' : undefined}
                       disabled={item.available_qty <= 0 || loadingAction}
                       onClick={() => openLoanModal(item.id)}
                     >
@@ -659,12 +1002,12 @@ export default function Home() {
       {showAddModal && (
         <div className="modal" onMouseDown={() => closeAllModals()}>
           <form className="modal-form" onMouseDown={e => e.stopPropagation()} onSubmit={handleAddItem}>
-            <h2>➕ הוספת פריט חדש</h2>
+            <h2>➕ הוספת פריט</h2>
             <input placeholder="שם פריט" value={newItem.name} onChange={e => setNewItem({ ...newItem, name: e.target.value })} required />
             <input type="number" placeholder='סה"כ כמות' value={newItem.qty} onChange={e => setNewItem({ ...newItem, qty: e.target.value })} required />
             <input type="file" accept="image/*" onChange={e => setNewItem({ ...newItem, image: e.target.files[0] })} required />
             <div className="modal-buttons">
-              <button type="submit" className="btn btn-solid" disabled={loadingAction}>{loadingAction ? 'טוען...' : 'הוסף פריט'}</button>
+              <button type="submit" className="btn btn-solid" disabled={loadingAction}>{loadingAction ? 'שומר...' : 'הוספה'}</button>
               <button type="button" className="btn btn-ghost" onClick={() => setShowAddModal(false)}>ביטול</button>
             </div>
           </form>
@@ -678,7 +1021,7 @@ export default function Home() {
             <h2>📤 השאלת פריט</h2>
             <p>{item.name} — זמין: {item.available_qty}</p>
             <input
-              placeholder="מי לוקח"
+              placeholder="שם הלווה"
               value={formInfo[item.id]?.borrower || ''}
               onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], borrower: e.target.value } })}
               required
@@ -703,12 +1046,12 @@ export default function Home() {
             <input
               type="number"
               step="0.01"
-              placeholder="סכום (השאר ריק לחינם)"
+              placeholder="סכום (ריק = חינם)"
               value={formInfo[item.id]?.payment || ''}
               onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], payment: e.target.value } })}
             />
             <div className="modal-buttons">
-              <button type="submit" className="btn btn-solid" disabled={loadingAction}>{loadingAction ? 'טוען...' : '📤 השאל'}</button>
+              <button type="submit" className="btn btn-solid" disabled={loadingAction}>{loadingAction ? 'שומר...' : '📤 השאלה'}</button>
               <button type="button" className="btn btn-ghost" onClick={() => setShowLoanModal(null)}>ביטול</button>
             </div>
           </form>
@@ -724,7 +1067,7 @@ export default function Home() {
 
             {openBorrowers.length > 0 && (
               <div className="borrowers-checklist">
-                <p className="checklist-label">בחר משאיל לבחירה מהירה:</p>
+                <p className="checklist-label">בחרו לווה לבחירה מהירה:</p>
                 {openBorrowers.map((b, i) => (
                   <button key={i} type="button" className="borrower-btn" onClick={() => selectOpenBorrower(b.name, b.qty)}>
                     {b.name} — {b.qty} יח׳ בהשאלה
@@ -734,14 +1077,14 @@ export default function Home() {
             )}
 
             <input
-              placeholder="שם המחזיר"
+              placeholder="שם המחזיר/ה"
               value={formInfo[item.id]?.returner || ''}
               onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], returner: e.target.value } })}
               required
             />
             <input
               type="number"
-              placeholder="כמות להחזרה"
+              placeholder="כמות"
               min="1"
               value={formInfo[item.id]?.returnQty || ''}
               onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], returnQty: e.target.value } })}
@@ -750,7 +1093,7 @@ export default function Home() {
             <input
               type="number"
               step="0.01"
-              placeholder="סכום ששולם (השאר ריק לחינם)"
+              placeholder="סכום ששולם (ריק = חינם)"
               value={formInfo[item.id]?.paidAmount || ''}
               onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], paidAmount: e.target.value } })}
             />
@@ -763,7 +1106,7 @@ export default function Home() {
             })()}
 
             <div className="modal-buttons">
-              <button type="submit" className="btn btn-success" disabled={loadingAction}>{loadingAction ? 'טוען...' : '📥 החזר'}</button>
+              <button type="submit" className="btn btn-success" disabled={loadingAction}>{loadingAction ? 'שומר...' : '📥 החזרה'}</button>
               <button type="button" className="btn btn-ghost" onClick={() => setShowReturnModal(null)}>ביטול</button>
             </div>
           </form>
@@ -779,7 +1122,7 @@ export default function Home() {
             <input type="number" placeholder='סה"כ כמות' value={editItem.total_qty} onChange={e => setEditItem({ ...editItem, total_qty: e.target.value })} required />
             <input type="file" accept="image/*" onChange={e => setEditItem({ ...editItem, image: e.target.files[0] })} />
             <div className="modal-buttons">
-              <button type="submit" className="btn btn-solid" disabled={loadingAction}>{loadingAction ? 'טוען...' : 'עדכן'}</button>
+              <button type="submit" className="btn btn-solid" disabled={loadingAction}>{loadingAction ? 'שומר...' : 'שמירה'}</button>
               <button type="button" className="btn btn-ghost" onClick={() => setShowEditModal(null)}>ביטול</button>
             </div>
           </form>
@@ -801,7 +1144,7 @@ export default function Home() {
                 </button>
               </div>
 
-              {!stats ? <p>אין היסטוריה להשאלה</p> : (
+              {!stats ? <p>אין רשומות השאלה עדיין</p> : (
                 <>
                   <div className="stats-tabs">
                     {[['overview', 'סיכום'], ['borrowers', 'משאילים'], ['log', 'יומן']].map(([id, label]) => (
@@ -919,7 +1262,7 @@ export default function Home() {
                 </button>
               </div>
 
-              {!stats ? <p>אין נתונים להצגה</p> : (
+              {!stats ? <p>אין נתונים להצגה עדיין</p> : (
                 <>
                   <div className="stats-tabs">
                     {[['overview', 'סיכום'], ['borrowers', 'משאילים'], ['items', 'פריטים'], ['overdue', 'חריגות']].map(([id, label]) => (
@@ -939,7 +1282,7 @@ export default function Home() {
                       </div>
 
                       <div className="stats-section">
-                        <p className="stats-section-title">מי לקח כרגע</p>
+                        <p className="stats-section-title">פריטים בהשאלה כרגע</p>
                         {Object.entries(stats.currentlyBorrowing).length === 0 ? (
                           <p style={{ color: 'var(--text-3)', fontSize: '0.85rem' }}>אין פריטים בהשאלה כרגע</p>
                         ) : (
@@ -996,7 +1339,7 @@ export default function Home() {
 
                   {globalStatsTab === 'items' && (
                     <div className="stats-section">
-                      <p className="stats-section-title">ניצולת לפי פריט</p>
+                      <p className="stats-section-title">ניצולת מלאי לפי פריט</p>
                       {stats.itemUtil.map((item, i) => (
                         <div key={i} className="util-row">
                           <span className="util-name">{item.name}</span>
@@ -1047,6 +1390,13 @@ export default function Home() {
               <div className="modal-buttons">
                 <button type="button" className="btn btn-ghost" style={{ flex: 'none', width: '100%' }} onClick={() => setShowGlobalHistory(false)}>סגור</button>
               </div>
+
+              <div style={{ textAlign: 'center', marginTop: '0.5rem' }}>
+                {!testMode
+                  ? <button className="test-mode-link" data-tutorial="tutorial-test" onClick={() => { closeAllModals(); enterTestMode() }}>🧪 כניסה למצב בדיקה</button>
+                  : <button className="test-mode-link test-mode-link-exit" onClick={() => { closeAllModals(); exitTestMode() }}>🔴 יציאה ממצב בדיקה</button>
+                }
+              </div>
             </div>
           </div>
         )
@@ -1056,16 +1406,16 @@ export default function Home() {
       {showMassMode && !massMode && (
         <div className="modal" onMouseDown={() => closeAllModals()}>
           <div className="modal-form" onMouseDown={e => e.stopPropagation()}>
-            <h2>⚡ מצב המוני</h2>
-            <p>בחר פעולה לביצוע על מספר פריטים בו-זמנית</p>
+            <h2>✅ מצב רשימה</h2>
+            <p>בחרו פעולה לביצוע על מספר פריטים בבת אחת</p>
             <div className="mode-picker">
               <button type="button" className="mode-btn" onClick={() => { setMassMode('take'); const l = getLastBorrowerInfo(); setMassBorrower(l.borrower); setMassAdmin(l.admin) }}>
                 <span className="mode-icon">📤</span>
-                <div><div>השאלה</div><div style={{ fontSize: '0.78rem', color: 'var(--text-3)', fontWeight: 400 }}>קח מספר פריטים בבת אחת</div></div>
+                <div><div>השאלה ברשימה</div><div style={{ fontSize: '0.78rem', color: 'var(--text-3)', fontWeight: 400 }}>השאלת מספר פריטים בבת אחת</div></div>
               </button>
               <button type="button" className="mode-btn" onClick={openMassReturnMode}>
                 <span className="mode-icon">📥</span>
-                <div><div>החזרה</div><div style={{ fontSize: '0.78rem', color: 'var(--text-3)', fontWeight: 400 }}>החזר מספר פריטים בבת אחת</div></div>
+                <div><div>החזרה ברשימה</div><div style={{ fontSize: '0.78rem', color: 'var(--text-3)', fontWeight: 400 }}>החזרת מספר פריטים בבת אחת</div></div>
               </button>
             </div>
             <button type="button" className="btn btn-ghost" onClick={() => closeAllModals()} style={{ width: '100%' }}>ביטול</button>
@@ -1076,39 +1426,37 @@ export default function Home() {
       {/* ── MASS TAKE ── */}
       {showMassMode && massMode === 'take' && (
         <div className="modal" onMouseDown={() => closeAllModals()}>
-          <div className="modal-form" style={{ maxHeight: '90vh', overflowY: 'auto', maxWidth: '560px' }} onMouseDown={e => e.stopPropagation()}>
-            <h2>📤 השאלה המונית</h2>
-
-            <input placeholder="מי לוקח" value={massBorrower} onChange={e => setMassBorrower(e.target.value)} required />
-            <select value={massAdmin} onChange={e => setMassAdmin(e.target.value)} required>
-              <option value="">בחר מאשר</option>
-              {admins.map((a, i) => <option key={i} value={a}>{a}</option>)}
-            </select>
-            <input type="number" step="0.01" placeholder="סכום תשלום (השאר ריק לחינם)" value={massPayment.amount || ''} onChange={e => setMassPayment({ ...massPayment, amount: e.target.value })} />
-
-            <p className="section-label" style={{ marginTop: '1rem' }}>בחר פריטים וכמויות</p>
-            <input type="text" placeholder="חיפוש..." value={massSearchQuery} onChange={e => setMassSearchQuery(e.target.value)} className="search-input" style={{ width: '100%', maxWidth: '100%', marginBottom: '0.75rem' }} />
-
-            {items
-              .filter(item => item.available_qty > 0 && item.name.toLowerCase().includes(massSearchQuery.toLowerCase()))
-              .map(item => (
-                <div key={item.id} className="mass-item">
-                  <img src={item.image_url} alt={item.name} />
-                  <div className="mass-item-info">
-                    <p>{item.name}</p>
-                    <p className="available">זמין: {item.available_qty}</p>
+          <div className="modal-form mass-modal-form" onMouseDown={e => e.stopPropagation()}>
+            <div className="mass-modal-scroll">
+              <h2>📤 השאלה ברשימה</h2>
+              <input placeholder="שם הלווה" value={massBorrower} onChange={e => setMassBorrower(e.target.value)} required />
+              <select value={massAdmin} onChange={e => setMassAdmin(e.target.value)} required>
+                <option value="">בחר מאשר</option>
+                {admins.map((a, i) => <option key={i} value={a}>{a}</option>)}
+              </select>
+              <input type="number" step="0.01" placeholder="סכום תשלום (ריק = חינם)" value={massPayment.amount || ''} onChange={e => setMassPayment({ ...massPayment, amount: e.target.value })} />
+              <p className="section-label" style={{ marginTop: '1rem' }}>בחרו פריטים וכמויות</p>
+              <input type="text" placeholder="חיפוש..." value={massSearchQuery} onChange={e => setMassSearchQuery(e.target.value)} className="search-input" style={{ width: '100%', maxWidth: '100%', marginBottom: '0.75rem' }} />
+              {items
+                .filter(item => item.available_qty > 0 && item.name.toLowerCase().includes(massSearchQuery.toLowerCase()))
+                .map(item => (
+                  <div key={item.id} className="mass-item">
+                    <img src={item.image_url} alt={item.name} />
+                    <div className="mass-item-info">
+                      <p>{item.name}</p>
+                      <p className="available">זמין: {item.available_qty}</p>
+                    </div>
+                    <input
+                      type="number" min="0" max={item.available_qty} placeholder="0"
+                      value={massSelection[item.id] || ''}
+                      onChange={e => { const v = e.target.value ? parseInt(e.target.value) : 0; if (v >= 0) setMassSelection(prev => ({ ...prev, [item.id]: v })) }}
+                    />
                   </div>
-                  <input
-                    type="number" min="0" max={item.available_qty} placeholder="0"
-                    value={massSelection[item.id] || ''}
-                    onChange={e => { const v = e.target.value ? parseInt(e.target.value) : 0; if (v >= 0) setMassSelection(prev => ({ ...prev, [item.id]: v })) }}
-                  />
-                </div>
-              ))}
-
-            <div className="modal-buttons" style={{ marginTop: '1rem' }}>
+                ))}
+            </div>
+            <div className="mass-modal-footer">
               <button type="button" className="btn btn-solid" onClick={processMassLoans} disabled={loadingAction || !massBorrower || !massAdmin}>
-                {loadingAction ? 'טוען...' : '✅ בצע השאלה'}
+                {loadingAction ? 'שומר...' : '✅ ביצוע השאלה'}
               </button>
               <button type="button" className="btn btn-ghost" onClick={() => { setMassMode(null); setMassSelection({}) }}>חזור</button>
             </div>
@@ -1119,48 +1467,47 @@ export default function Home() {
       {/* ── MASS RETURN ── */}
       {showMassMode && massMode === 'return' && (
         <div className="modal" onMouseDown={() => closeAllModals()}>
-          <div className="modal-form" style={{ maxHeight: '90vh', overflowY: 'auto', maxWidth: '560px' }} onMouseDown={e => e.stopPropagation()}>
-            <h2>📥 החזרה המונית</h2>
-
-            <select value={massReturnBorrower} onChange={e => setMassReturnBorrower(e.target.value)} required>
-              <option value="">בחר משאיל</option>
-              {allLoans
-                .filter(l => (l.quantity - (l.returned_qty || 0)) > 0)
-                .map(l => l.borrower)
-                .filter((v, i, a) => a.indexOf(v) === i).sort()
-                .map((b, i) => <option key={i} value={b}>{b}</option>)}
-            </select>
-            <input type="number" step="0.01" placeholder="סכום ששולם (השאר ריק לחינם)" value={massPayment.paid || ''} onChange={e => setMassPayment({ ...massPayment, paid: e.target.value })} />
-
-            {massReturnBorrower && (
-              <>
-                <p className="section-label" style={{ marginTop: '1rem' }}>בחר פריטים וכמויות</p>
-                {items.map(item => {
-                  const borrowed = allLoans
-                    .filter(l => l.item_id === item.id && l.borrower === massReturnBorrower && (l.quantity - (l.returned_qty || 0)) > 0)
-                    .reduce((s, l) => s + (l.quantity - (l.returned_qty || 0)), 0)
-                  if (borrowed <= 0) return null
-                  return (
-                    <div key={item.id} className="mass-item">
-                      <img src={item.image_url} alt={item.name} />
-                      <div className="mass-item-info">
-                        <p>{item.name}</p>
-                        <p className="available">בהשאלה: {borrowed}</p>
+          <div className="modal-form mass-modal-form" onMouseDown={e => e.stopPropagation()}>
+            <div className="mass-modal-scroll">
+              <h2>📥 החזרה ברשימה</h2>
+              <select value={massReturnBorrower} onChange={e => setMassReturnBorrower(e.target.value)} required>
+                <option value="">בחר לווה</option>
+                {allLoans
+                  .filter(l => (l.quantity - (l.returned_qty || 0)) > 0)
+                  .map(l => l.borrower)
+                  .filter((v, i, a) => a.indexOf(v) === i).sort()
+                  .map((b, i) => <option key={i} value={b}>{b}</option>)}
+              </select>
+              <input type="number" step="0.01" placeholder="סכום ששולם (ריק = חינם)" value={massPayment.paid || ''} onChange={e => setMassPayment({ ...massPayment, paid: e.target.value })} />
+              {massReturnBorrower && (
+                <>
+                  <p className="section-label" style={{ marginTop: '1rem' }}>בחרו פריטים וכמויות</p>
+                  {items.map(item => {
+                    const borrowed = allLoans
+                      .filter(l => l.item_id === item.id && l.borrower === massReturnBorrower && (l.quantity - (l.returned_qty || 0)) > 0)
+                      .reduce((s, l) => s + (l.quantity - (l.returned_qty || 0)), 0)
+                    if (borrowed <= 0) return null
+                    return (
+                      <div key={item.id} className="mass-item">
+                        <img src={item.image_url} alt={item.name} />
+                        <div className="mass-item-info">
+                          <p>{item.name}</p>
+                          <p className="available">בהשאלה: {borrowed}</p>
+                        </div>
+                        <input
+                          type="number" min="0" max={borrowed} placeholder="0"
+                          value={massReturnQty[item.id] || ''}
+                          onChange={e => { const v = e.target.value ? parseInt(e.target.value) : 0; if (v >= 0) setMassReturnQty(prev => ({ ...prev, [item.id]: v })) }}
+                        />
                       </div>
-                      <input
-                        type="number" min="0" max={borrowed} placeholder="0"
-                        value={massReturnQty[item.id] || ''}
-                        onChange={e => { const v = e.target.value ? parseInt(e.target.value) : 0; if (v >= 0) setMassReturnQty(prev => ({ ...prev, [item.id]: v })) }}
-                      />
-                    </div>
-                  )
-                })}
-              </>
-            )}
-
-            <div className="modal-buttons" style={{ marginTop: '1rem' }}>
+                    )
+                  })}
+                </>
+              )}
+            </div>
+            <div className="mass-modal-footer">
               <button type="button" className="btn btn-success" onClick={processMassReturns} disabled={loadingAction || !massReturnBorrower}>
-                {loadingAction ? 'טוען...' : '✅ בצע החזרה'}
+                {loadingAction ? 'שומר...' : '✅ ביצוע החזרה'}
               </button>
               <button type="button" className="btn btn-ghost" onClick={() => { setMassMode(null); setMassReturnQty({}) }}>חזור</button>
             </div>
@@ -1169,20 +1516,23 @@ export default function Home() {
       )}
 
       {/* ── SHARE - PICK BORROWER ── */}
-      {showShareModal && !selectedShareBorrower && (
+      {showShareModal && (
         <div className="modal" onMouseDown={() => closeAllModals()}>
           <div className="modal-form" style={{ maxHeight: '85vh', overflowY: 'auto', maxWidth: '440px' }} onMouseDown={e => e.stopPropagation()}>
-            <h2>💬 שלח דרך WhatsApp</h2>
-            <p>בחר משאיל לשליחת רשימת הפריטים בהשאלה</p>
+            <h2>💬 שליחה בוואטסאפ</h2>
+            <p style={{ color: 'var(--text-2)', fontSize: '0.85rem', margin: '0 0 1rem' }}>בחרו לווה — תיפתח הודעה מוכנה בוואטסאפ</p>
             {(() => {
               const unique = allLoans
                 .filter(l => (l.quantity - (l.returned_qty || 0)) > 0)
                 .map(l => l.borrower)
                 .filter((v, i, a) => a.indexOf(v) === i).sort()
-              return unique.length === 0 ? <p>אין משאילים כרגע</p> : (
+              return unique.length === 0 ? <p style={{ color: 'var(--text-3)' }}>אין לווים פעילים כרגע</p> : (
                 <div className="share-list">
                   {unique.map((borrower, i) => (
-                    <button key={i} type="button" className="share-borrower-btn" onClick={() => setSelectedShareBorrower(borrower)}>{borrower}</button>
+                    <button key={i} type="button" className="share-borrower-btn" onClick={() => handleShare(borrower)}>
+                      <span>{borrower}</span>
+                      <span style={{ fontSize: '1.1rem' }}>💬</span>
+                    </button>
                   ))}
                 </div>
               )
@@ -1194,47 +1544,108 @@ export default function Home() {
         </div>
       )}
 
-      {/* ── SHARE - ENTER PHONE ── */}
-      {showShareModal && selectedShareBorrower && (
-        <div className="modal" onMouseDown={() => closeAllModals()}>
-          <div className="modal-form" onMouseDown={e => e.stopPropagation()}>
-            <h2>📱 שלח ל-{selectedShareBorrower}</h2>
-            <p>הכנס מספר טלפון לשליחה ב-WhatsApp</p>
-            <input
-              type="tel"
-              placeholder="0501234567"
-              value={sharePhoneNumber}
-              onChange={e => setSharePhoneNumber(e.target.value)}
-              onKeyPress={e => e.key === 'Enter' && handleShare()}
-              autoFocus
-            />
-            <div className="modal-buttons">
-              <button type="button" className="btn btn-solid" style={{ background: '#25d366', borderColor: '#25d366' }} onClick={handleShare}>
-                ✓ שלח ב-WhatsApp
-              </button>
-              <button type="button" className="btn btn-ghost" onClick={() => setSelectedShareBorrower('')}>חזור</button>
+      {/* ── TUTORIAL OVERLAY ── */}
+      {tutorialActive && (() => {
+        const step = TUTORIAL_STEPS[tutorialStep]
+        const hasSpot = !!spotlightRect
+        const vw = vpSize.w || (typeof window !== 'undefined' ? window.innerWidth : 390)
+        const vh = vpSize.h || (typeof window !== 'undefined' ? window.innerHeight : 844)
+        const { x = 0, y = 0, w = 0, h = 0 } = spotlightRect || {}
+        const r = 12
+        // SVG path: full viewport minus rounded-rect cutout
+        const cutout = hasSpot
+          ? `M${x+r},${y} H${x+w-r} Q${x+w},${y} ${x+w},${y+r} V${y+h-r} Q${x+w},${y+h} ${x+w-r},${y+h} H${x+r} Q${x},${y+h} ${x},${y+h-r} V${y+r} Q${x},${y} ${x+r},${y} Z`
+          : ''
+
+        return (
+          <div className="tutorial-overlay" style={{ direction: 'rtl' }}>
+            {/* Backdrop: SVG with cutout when we have a target, plain dim otherwise */}
+            <svg
+              className="tutorial-svg"
+              width={vw} height={vh}
+              viewBox={`0 0 ${vw} ${vh}`}
+              style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 9998 }}
+            >
+              <path
+                d={`M0,0 H${vw} V${vh} H0 Z ${cutout}`}
+                fill="rgba(0,0,0,0.75)"
+                fillRule="evenodd"
+              />
+              {hasSpot && (
+                <rect x={x} y={y} width={w} height={h} rx={r} ry={r}
+                  fill="none" stroke="#63b3ed" strokeWidth="2.5"
+                  opacity="0.8"
+                  style={{ animation: 'tut-ring-pulse 1.8s ease-in-out infinite' }}
+                />
+              )}
+            </svg>
+
+            {/* Centered tooltip card — always on screen, no positioning math */}
+            <div
+              className={'tutorial-card' + (tutorialVisible ? ' tutorial-card-in' : ' tutorial-card-out')}
+              style={{
+                position: 'fixed',
+                bottom: 'calc(var(--tab-bar-h, 0px) + 1rem)',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 10000,
+                width: 'min(340px, calc(100vw - 2rem))',
+              }}
+            >
+              <div className="tutorial-card-header">
+                <span className="tutorial-step-icon">{step.icon}</span>
+                <span className="tutorial-step-counter">{tutorialStep + 1} / {TUTORIAL_STEPS.length}</span>
+                <button className="tutorial-btn-x" onClick={endTutorial} title="סגור">✕</button>
+              </div>
+
+              <h3 className="tutorial-card-title">{step.title}</h3>
+              <p className="tutorial-card-body">{step.body}</p>
+
+              <div className="tutorial-dots">
+                {TUTORIAL_STEPS.map((_, i) => (
+                  <span key={i} className={'tutorial-dot' + (i === tutorialStep ? ' active' : '')} onClick={() => tutorialGoTo(i)} />
+                ))}
+              </div>
+
+              <div className="tutorial-card-actions">
+                <button
+                  className="tutorial-btn-back"
+                  onClick={tutorialPrev}
+                  disabled={tutorialStep === 0}
+                  style={{ opacity: tutorialStep === 0 ? 0.3 : 1 }}
+                >
+                  → חזור
+                </button>
+                <button className="tutorial-btn-next" onClick={tutorialNext}>
+                  {tutorialStep === TUTORIAL_STEPS.length - 1 ? '✓ סיום' : 'הבא ←'}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* ── MOBILE BOTTOM TAB BAR ── */}
       <nav className="mobile-tab-bar">
-        <button className="tab-btn" onClick={fetchAllLoans} disabled={loadingHistory}>
+        <button className="tab-btn" data-tutorial="tutorial-stats" onClick={fetchAllLoans} disabled={loadingHistory}>
           <span className="tab-icon">📊</span>
           <span className="tab-label">סטטיסטיקה</span>
         </button>
-        <button className="tab-btn" onClick={() => { setShowShareModal(true); fetchAllLoans() }}>
+        <button className="tab-btn" data-tutorial="tutorial-send" onClick={() => { setShowShareModal(true); fetchAllLoans() }}>
           <span className="tab-icon">💬</span>
           <span className="tab-label">שלח</span>
         </button>
-        <button className="tab-btn tab-add" onClick={() => setShowAddModal(true)} disabled={loadingAction || loadingItems}>
+        <button className="tab-btn tab-add" data-tutorial="tutorial-add" onClick={() => setShowAddModal(true)} disabled={loadingAction || loadingItems}>
           <span className="tab-icon-wrap">＋</span>
           <span className="tab-label">הוסף</span>
         </button>
-        <button className="tab-btn" onClick={() => setShowMassMode(true)}>
-          <span className="tab-icon">⚡</span>
-          <span className="tab-label">המוני</span>
+        <button className="tab-btn" data-tutorial="tutorial-list" onClick={() => setShowMassMode(true)}>
+          <span className="tab-icon">✅</span>
+          <span className="tab-label">רשימה</span>
+        </button>
+        <button className="tab-btn" onClick={startTutorial}>
+          <span className="tab-icon">🎓</span>
+          <span className="tab-label">הדרכה</span>
         </button>
       </nav>
 
