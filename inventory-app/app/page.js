@@ -63,6 +63,27 @@ export default function Home() {
   const [massReturnQty, setMassReturnQty] = useState({})
 
   const [searchQuery, setSearchQuery] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState('הכל')
+
+  // ── CATEGORIES ──
+  // Each entry: { label, keywords } — item matches if its name includes ANY keyword
+  const CATEGORIES = [
+    { label: 'הכל' },
+    { label: 'מפות',          keywords: ['מפות'] },
+    { label: 'מרכזי שולחן',   keywords: ['מרכז שולחן', 'פלייסמנט', 'ראנר', 'ספסל עץ למרכז', 'קוביות עץ', 'אגרטל', 'אגרטלי'] },
+    { label: 'פרחים',         keywords: ['פרח', 'ורד', 'ורדים', 'חמניה', 'זר פרחים', 'פרחים'] },
+    { label: 'עציצים',        keywords: ['עציץ', 'אדנית'] },
+    { label: 'מגשים',         keywords: ['מגש', 'מגשי'] },
+    { label: 'שבת קודש',      keywords: ['פמוט', 'פמות', 'נרוני', 'מלחי', 'נטלה', 'עששית', 'סט פמוטים', 'קפה תה', 'פעמונים'] },
+  ]
+
+  function getItemCategory(name) {
+    for (const cat of CATEGORIES) {
+      if (!cat.keywords) continue
+      if (cat.keywords.some(kw => name.includes(kw))) return cat.label
+    }
+    return null
+  }
   const [massSearchQuery, setMassSearchQuery] = useState('')
 
   const [showShareModal, setShowShareModal] = useState(false)
@@ -1124,9 +1145,26 @@ export default function Home() {
             />
           </div>
 
+          {/* ── CATEGORY PILLS ── */}
+          <div className="category-pills">
+            {CATEGORIES.map(cat => (
+              <button
+                key={cat.label}
+                className={'category-pill' + (selectedCategory === cat.label ? ' active' : '')}
+                onClick={() => setSelectedCategory(cat.label)}
+              >
+                {cat.label}
+              </button>
+            ))}
+          </div>
+
           <div className="grid">
             {items
-              .filter(item => item.name.toLowerCase().includes(searchQuery.toLowerCase()))
+              .filter(item => {
+                const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase())
+                const matchesCategory = selectedCategory === 'הכל' || getItemCategory(item.name) === selectedCategory
+                return matchesSearch && matchesCategory
+              })
               .map((item, filteredIdx) => (
                 <div key={item.id} className="card">
                   <img src={item.image_url} alt={item.name} />

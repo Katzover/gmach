@@ -228,6 +228,41 @@ main {
 
 .search-input::placeholder { color: var(--text-3); }
 
+/* ── CATEGORY PILLS ─────────────────────────────────────────── */
+.category-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  direction: rtl;
+}
+
+.category-pill {
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-2);
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color var(--t) var(--ease), border-color var(--t) var(--ease), background var(--t) var(--ease);
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.category-pill:hover {
+  color: var(--text-1);
+  border-color: rgba(255,255,255,0.18);
+}
+
+.category-pill.active {
+  background: var(--blue-dim);
+  border-color: rgba(79,142,247,0.4);
+  color: var(--blue);
+}
+
 /* ── GRID ────────────────────────────────────────────────────── */
 .grid {
   display: grid;
