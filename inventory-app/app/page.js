@@ -2,6 +2,120 @@
 import React, { useState, useEffect } from 'react'
 import './page.css'
 
+// ── EVENT CALENDAR COMPONENT ────────────────────────────────────
+function EventCalendar({ loans, items }) {
+  const [viewDate, setViewDate] = React.useState(() => new Date())
+  const year = viewDate.getFullYear()
+  const month = viewDate.getMonth()
+
+  const monthLoans = loans.filter(l => {
+    if (!l.event_date) return false
+    const d = new Date(l.event_date)
+    return d.getFullYear() === year && d.getMonth() === month
+  })
+
+  // Group by day
+  const byDay = {}
+  monthLoans.forEach(l => {
+    const day = new Date(l.event_date).getDate()
+    if (!byDay[day]) byDay[day] = []
+    // Merge entries by borrower for that day
+    const existing = byDay[day].find(e => e.borrower === l.borrower)
+    if (existing) {
+      existing.itemCount += 1
+      existing.items.push(items.find(i => i.id === l.item_id)?.name || '')
+    } else {
+      byDay[day].push({ borrower: l.borrower, itemCount: 1, items: [items.find(i => i.id === l.item_id)?.name || ''] })
+    }
+  })
+
+  // Days of week starting Sunday (RTL: show as א ב ג ד ה ו ש)
+  const DOW = ['א','ב','ג','ד','ה','ו','ש']
+  const firstDow = new Date(year, month, 1).getDay()
+  const daysInMonth = new Date(year, month + 1, 0).getDate()
+  const monthNames = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר']
+
+  // Upcoming events (all future events sorted by date)
+  const today = new Date(); today.setHours(0,0,0,0)
+  const upcoming = loans
+    .filter(l => l.event_date && new Date(l.event_date) >= today)
+    .sort((a, b) => new Date(a.event_date) - new Date(b.event_date))
+    .reduce((acc, l) => {
+      const key = l.event_date + '|' + l.borrower
+      if (!acc.find(e => e.key === key)) {
+        const borrowerLoans = loans.filter(x => x.event_date === l.event_date && x.borrower === l.borrower)
+        acc.push({ key, borrower: l.borrower, date: l.event_date, count: borrowerLoans.reduce((s, x) => s + x.quantity, 0) })
+      }
+      return acc
+    }, [])
+    .slice(0, 8)
+
+  return (
+    <div style={{ direction: 'rtl' }}>
+      {/* Month nav */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
+        <button className="btn btn-ghost" style={{ padding: '0.3rem 0.7rem', fontSize: '1rem' }}
+          onClick={() => setViewDate(new Date(year, month - 1, 1))}>→</button>
+        <strong style={{ fontSize: '1rem', color: 'var(--text-1)' }}>{monthNames[month]} {year}</strong>
+        <button className="btn btn-ghost" style={{ padding: '0.3rem 0.7rem', fontSize: '1rem' }}
+          onClick={() => setViewDate(new Date(year, month + 1, 1))}>←</button>
+      </div>
+
+      {/* Calendar grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '2px', marginBottom: '1.25rem' }}>
+        {DOW.map(d => (
+          <div key={d} style={{ fontSize: '0.68rem', color: 'var(--text-3)', textAlign: 'center', padding: '0.25rem 0', fontWeight: 700 }}>{d}</div>
+        ))}
+        {Array.from({ length: firstDow }).map((_, i) => <div key={'pad'+i} />)}
+        {Array.from({ length: daysInMonth }).map((_, i) => {
+          const day = i + 1
+          const events = byDay[day] || []
+          const isToday = new Date().getDate() === day && new Date().getMonth() === month && new Date().getFullYear() === year
+          return (
+            <div key={day} title={events.map(e => e.borrower).join(', ')} style={{
+              background: events.length ? 'var(--blue-dim)' : 'var(--bg-raised)',
+              border: isToday ? '1px solid var(--blue)' : '1px solid var(--border)',
+              borderRadius: '6px',
+              padding: '0.2rem 0.15rem',
+              minHeight: '44px',
+              overflow: 'hidden',
+            }}>
+              <div style={{ fontSize: '0.72rem', color: isToday ? 'var(--blue)' : 'var(--text-2)', fontWeight: isToday ? 700 : 400, textAlign: 'center' }}>{day}</div>
+              {events.slice(0, 2).map((e, j) => (
+                <div key={j} style={{ fontSize: '0.52rem', color: 'var(--blue)', background: 'rgba(79,142,247,0.18)', borderRadius: '3px', padding: '1px 3px', marginTop: '2px', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                  {e.borrower}
+                </div>
+              ))}
+              {events.length > 2 && <div style={{ fontSize: '0.5rem', color: 'var(--text-3)', textAlign: 'center' }}>+{events.length - 2}</div>}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Upcoming events list */}
+      {upcoming.length > 0 && (
+        <>
+          <p className="stats-section-title">אירועים קרובים</p>
+          {upcoming.map((e, i) => (
+            <div key={i} className="history-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <strong style={{ fontSize: '0.9rem' }}>{e.borrower}</strong>
+                <p style={{ margin: '0.1rem 0 0', fontSize: '0.8rem', color: 'var(--text-2)' }}>{e.count} פריטים</p>
+              </div>
+              <span className="badge" style={{ background: 'var(--blue-dim)', color: 'var(--blue)', border: '1px solid rgba(79,142,247,0.3)', fontWeight: 600 }}>
+                {new Date(e.date).toLocaleDateString('he-IL', { day: 'numeric', month: 'short' })}
+              </span>
+            </div>
+          ))}
+        </>
+      )}
+      {monthLoans.length === 0 && upcoming.length === 0 && (
+        <p style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: '0.85rem', padding: '1.5rem 0' }}>אין אירועים מתוכננים</p>
+      )}
+    </div>
+  )
+}
+
 export default function Home() {
   const [items, setItems] = useState([])
   const [message, setMessage] = useState('')
@@ -91,6 +205,7 @@ export default function Home() {
   const [sharePhoneNumber, setSharePhoneNumber] = useState('')
 
   const [massPayment, setMassPayment] = useState({})
+  const [massEventDate, setMassEventDate] = useState('')
   const [paymentMismatches, setPaymentMismatches] = useState([]) // [{borrower, itemName, expected, paid, date}]
 
   const [globalStatsTab, setGlobalStatsTab] = useState('overview')
@@ -186,7 +301,7 @@ export default function Home() {
           const item = shadow.find(i => i.id === body.item_id)
           if (item && item.available_qty >= body.quantity) {
             item.available_qty -= body.quantity
-            const loan = { id: String(testLoanIdCounter.current++), item_id: body.item_id, borrower: body.borrower, quantity: body.quantity, returned_qty: 0, admin: body.admin, payment: body.price, date_taken: new Date().toISOString() }
+            const loan = { id: String(testLoanIdCounter.current++), item_id: body.item_id, borrower: body.borrower, quantity: body.quantity, returned_qty: 0, admin: body.admin, payment: body.price, event_date: body.event_date || null, date_taken: new Date().toISOString() }
             loans.push(loan)
             resolve({ ok: true, json: () => Promise.resolve({ success: true }) })
           } else {
@@ -237,17 +352,21 @@ export default function Home() {
   }, [testMode])
 
   // ── TUTORIAL ──
-  const TUTORIAL_STEPS = [
-    { id: 'welcome',   target: null,              title: 'ברוכים הבאים לגמ״ח עיר דוד', body: 'הדרכה קצרה תעזור לכם להכיר את המערכת. כל הפעולות בהדרכה מתבצעות במצב בדיקה — שום פעולה לא תישמר.', icon: '👋' },
-    { id: 'add-item',  target: 'tutorial-add',    title: 'הוספת פריט חדש',   body: 'לחצו על "הוספה" להוספת פריט למלאי. ניתן לקבוע שם, כמות ותמונה.',                                            icon: '➕' },
-    { id: 'loan',      target: 'tutorial-loan',   title: 'השאלת פריט',       body: 'לחצו על "📤 השאלה" בכרטיסיית הפריט, מלאו את שם הלווה, הכמות והמאשר/ת.',                                   icon: '📤' },
-    { id: 'return',    target: 'tutorial-return', title: 'החזרת פריט',       body: 'לחצו על "📥 החזרה" לרישום החזרה. המערכת מציגה אוטומטית את רשימת הלווים הפעילים לפריט זה.',              icon: '📥' },
-    { id: 'list-mode', target: 'tutorial-list',   title: 'מצב רשימה',        body: 'השאילו או החזירו מספר פריטים בפעולה אחת. אידיאלי לאירועים עם ציוד רב.',                                    icon: '✅' },
-    { id: 'send',      target: 'tutorial-send',   title: 'שליחה בוואטסאפ',   body: 'בחרו לווה מהרשימה ותיפתח הודעה מוכנה בוואטסאפ עם פירוט כל הפריטים שלו — לשליחה ישירה.',              icon: '💬' },
-    { id: 'stats',     target: 'tutorial-stats',  title: 'סטטיסטיקה',        body: 'צפו בנתוני ההשאלות, עקבו אחר הלווים הפעילים, וזהו פריטים שלא הוחזרו בזמן.',                             icon: '📊' },
-    { id: 'test-mode', target: 'tutorial-test',   title: 'מצב בדיקה',        body: 'מצב בדיקה מאפשר לנסות את כל הפעולות מבלי שדבר יישמר. כדי להיכנס: פתחו סטטיסטיקה ← לחצו "כניסה למצב בדיקה" בתחתית.', icon: '🧪' },
-    { id: 'done',      target: null,              title: 'הכל מוכן!',         body: 'כל הכבוד! כעת תוכלו להשתמש במערכת. להפעלה מחדש של ההדרכה — לחצו על 🎓 בסרגל הניווט.',             icon: '🎓' },
+  // Steps are computed so admin-only steps are hidden for viewers
+  const ALL_TUTORIAL_STEPS = [
+    { id: 'welcome',    adminOnly: false, target: null,              title: 'ברוכים הבאים לגמ״ח עיר דוד', body: 'הדרכה קצרה תעזור לכם להכיר את המערכת. כל הפעולות בהדרכה מתבצעות במצב בדיקה — שום פעולה לא תישמר.', icon: '👋' },
+    { id: 'add-item',   adminOnly: true,  target: 'tutorial-add',   title: 'הוספת פריט חדש',      body: 'לחצו על "הוספה" להוספת פריט למלאי. ניתן לקבוע שם, כמות ותמונה.',                                            icon: '➕' },
+    { id: 'categories', adminOnly: false, target: 'tutorial-cats',  title: 'קטגוריות',             body: 'השתמשו בכפתורי הקטגוריות כדי לסנן את המלאי — מפות, פרחים, עציצים, מגשים, מרכזי שולחן ושבת קודש. לחצו "הכל" לחזרה לתצוגה המלאה.', icon: '🗂️' },
+    { id: 'loan',       adminOnly: false, target: 'tutorial-loan',  title: 'השאלת פריט',          body: 'לחצו על "📤 השאלה" בכרטיסיית הפריט, מלאו את שם הלווה, הכמות, המאשר/ת ותאריך האירוע (אופציונלי).',           icon: '📤' },
+    { id: 'return',     adminOnly: false, target: 'tutorial-return',title: 'החזרת פריט',          body: 'לחצו על "📥 החזרה" לרישום החזרה. המערכת מציגה אוטומטית את רשימת הלווים הפעילים לפריט זה.',              icon: '📥' },
+    { id: 'list-mode',  adminOnly: false, target: 'tutorial-list',  title: 'מצב רשימה',           body: 'השאילו או החזירו מספר פריטים בפעולה אחת. אידיאלי לאירועים עם ציוד רב.',                                    icon: '✅' },
+    { id: 'send',       adminOnly: false, target: 'tutorial-send',  title: 'שליחה בוואטסאפ',      body: 'בחרו לווה מהרשימה ותיפתח הודעה מוכנה בוואטסאפ עם פירוט כל הפריטים שלו — לשליחה ישירה.',              icon: '💬' },
+    { id: 'stats',      adminOnly: false, target: 'tutorial-stats', title: 'סטטיסטיקה ולוח אירועים', body: 'צפו בנתוני ההשאלות, עקבו אחר הלווים הפעילים, ובלשונית "אירועים" תמצאו לוח שנה עם כל האירועים המתוכננים.',  icon: '📊' },
+    { id: 'test-mode',  adminOnly: false, target: 'tutorial-test',  title: 'מצב בדיקה',           body: 'מצב בדיקה מאפשר לנסות את כל הפעולות מבלי שדבר יישמר. כדי להיכנס: פתחו סטטיסטיקה ← לחצו "כניסה למצב בדיקה" בתחתית.', icon: '🧪' },
+    { id: 'done',       adminOnly: false, target: null,             title: 'הכל מוכן!',            body: 'כל הכבוד! כעת תוכלו להשתמש במערכת. להפעלה מחדש של ההדרכה — לחצו על 🎓 בסרגל הניווט.',             icon: '🎓' },
   ]
+  // Filter steps based on role (null = still loading, show all)
+  const TUTORIAL_STEPS = ALL_TUTORIAL_STEPS.filter(s => !s.adminOnly || isAdmin || userRole === null)
 
   const [tutorialActive, setTutorialActive] = useState(false)
   const [tutorialStep, setTutorialStep] = useState(0)
@@ -532,7 +651,7 @@ export default function Home() {
       const res = await apiFetch('/api/loans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item_id, borrower: info.borrower, quantity: qty, admin: info.admin, price: info.payment !== undefined && info.payment !== '' ? roundMoney(Number(info.payment)) : -1 })
+        body: JSON.stringify({ item_id, borrower: info.borrower, quantity: qty, admin: info.admin, price: info.payment !== undefined && info.payment !== '' ? roundMoney(Number(info.payment)) : -1, event_date: info.eventDate || null })
       })
       const data = await res.json()
       if (res.ok && data.success) {
@@ -839,13 +958,13 @@ export default function Home() {
         }
       }
       for (const { item_id, quantity } of selectedItems) {
-        const res = await apiFetch('/api/loans', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id, borrower: massBorrower, quantity, admin: massAdmin, price: massPayment.amount !== undefined && massPayment.amount !== '' ? roundMoney(Number(massPayment.amount)) : -1 }) })
+        const res = await apiFetch('/api/loans', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_id, borrower: massBorrower, quantity, admin: massAdmin, price: massPayment.amount !== undefined && massPayment.amount !== '' ? roundMoney(Number(massPayment.amount)) : -1, event_date: massEventDate || null }) })
         const data = await res.json()
         if (!res.ok || !data.success) throw new Error(`שגיאה בפריט ${items.find(i => i.id === item_id)?.name}: ${data.error}`)
       }
       showMessage(`${selectedItems.length} פריטים הושאלו ל${massBorrower} ✅`)
       saveBorrowerInfo(massBorrower, massAdmin)
-      setShowMassMode(false); setMassMode(null); setMassSelection({}); setMassBorrower(''); setMassAdmin('')
+      setShowMassMode(false); setMassMode(null); setMassSelection({}); setMassBorrower(''); setMassAdmin(''); setMassEventDate('')
       setItems(await (await apiFetch('/api/items')).json())
     } catch (err) {
       showMessage(`שגיאה בהשאלה: ${err.message} ❌`)
@@ -1146,7 +1265,7 @@ export default function Home() {
           </div>
 
           {/* ── CATEGORY PILLS ── */}
-          <div className="category-pills">
+          <div className="category-pills" data-tutorial="tutorial-cats">
             {CATEGORIES.map(cat => (
               <button
                 key={cat.label}
@@ -1192,10 +1311,6 @@ export default function Home() {
                     {item.total_qty} זמין
                   </p>
 
-                  {/* Zero-size tutorial anchor for return — no layout impact */}
-                  {filteredIdx === 0 && (
-                    <span data-tutorial="tutorial-return" style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden', pointerEvents: 'none' }} aria-hidden="true" />
-                  )}
                   <div className="card-actions">
                     <button
                       className="btn btn-blue"
@@ -1208,6 +1323,7 @@ export default function Home() {
                     {item.available_qty < item.total_qty && (
                       <button
                         className="btn btn-green"
+                        data-tutorial={filteredIdx === 0 ? 'tutorial-return' : undefined}
                         disabled={loadingAction}
                         onClick={() => openReturnModal(item.id)}
                       >
@@ -1276,6 +1392,13 @@ export default function Home() {
               placeholder="סכום (ריק = חינם)"
               value={formInfo[item.id]?.payment || ''}
               onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], payment: e.target.value } })}
+            />
+            <label style={{ fontSize: '0.8rem', color: 'var(--text-2)', marginBottom: '0.25rem', display: 'block' }}>📅 תאריך האירוע (אופציונלי)</label>
+            <input
+              type="date"
+              value={formInfo[item.id]?.eventDate || ''}
+              onChange={e => setFormInfo({ ...formInfo, [item.id]: { ...formInfo[item.id], eventDate: e.target.value } })}
+              style={{ colorScheme: 'dark' }}
             />
             <div className="modal-buttons">
               <button type="submit" className="btn btn-solid" disabled={loadingAction}>{loadingAction ? 'שומר...' : '📤 השאלה'}</button>
@@ -1538,7 +1661,7 @@ export default function Home() {
               {!stats ? <p>אין נתונים להצגה עדיין</p> : (
                 <>
                   <div className="stats-tabs">
-                    {[['overview', 'סיכום'], ['borrowers', 'משאילים'], ['items', 'פריטים'], ['overdue', 'בעיות']].map(([id, label]) => (
+                    {[['overview', 'סיכום'], ['borrowers', 'משאילים'], ['items', 'פריטים'], ['overdue', 'בעיות'], ['calendar', '📅 אירועים']].map(([id, label]) => (
                       <button key={id} className={`stats-tab${globalStatsTab === id ? ' active' : ''}`} onClick={() => setGlobalStatsTab(id)}>
                         {id === 'overdue' && (stats.overdueLoans.length > 0 || paymentMismatches.some(m => m.status === 'mismatch'))
                           ? <>{label}<span className="tab-alert-dot">{stats.overdueLoans.length + paymentMismatches.filter(m => !m.status || m.status === 'mismatch').length}</span></>
@@ -1721,6 +1844,9 @@ export default function Home() {
                       )}
                     </div>
                   )}
+                  {globalStatsTab === 'calendar' && (
+                    <EventCalendar loans={allLoans} items={items} />
+                  )}
                 </>
               )}
 
@@ -1772,6 +1898,8 @@ export default function Home() {
                 {admins.map((a, i) => <option key={i} value={a}>{a}</option>)}
               </select>
               <input type="number" step="0.01" placeholder="סכום תשלום (ריק = חינם)" value={massPayment.amount || ''} onChange={e => setMassPayment({ ...massPayment, amount: e.target.value })} />
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-2)', margin: '0.5rem 0 0.25rem', display: 'block' }}>📅 תאריך האירוע (אופציונלי)</label>
+              <input type="date" value={massEventDate} onChange={e => setMassEventDate(e.target.value)} style={{ colorScheme: 'dark' }} />
               <p className="section-label" style={{ marginTop: '1rem' }}>בחרו פריטים וכמויות</p>
               <input type="text" placeholder="חיפוש..." value={massSearchQuery} onChange={e => setMassSearchQuery(e.target.value)} className="search-input" style={{ width: '100%', maxWidth: '100%', marginBottom: '0.75rem' }} />
               {items

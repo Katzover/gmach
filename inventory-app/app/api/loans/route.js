@@ -1,44 +1,41 @@
-import { supabase } from '@/lib/supabaseServer'
+import { createClient } from '@supabase/supabase-js'
+import { NextResponse } from 'next/server'
 
-export async function POST(req) {
+function getSupabase() {
+  return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+}
+
+export async function POST(request) {
   try {
-    const { item_id, borrower, quantity, price } = await req.json()
-    if (!item_id || !borrower || !quantity) {
-      return new Response(JSON.stringify({ error: 'Missing required fields' }), { status: 400 })
-    }
+    const { item_id, borrower, quantity, admin, price, event_date } = await request.json()
+    const supabase = getSupabase()
 
-    // Validate item exists
-    const { data: itemData, error: itemError } = await supabase
-      .from('items')
-      .select('available_qty')
-      .eq('id', item_id)
-      .single()
-    
-    if (itemError || !itemData) {
-      return new Response(JSON.stringify({ error: 'Item not found - index out of range' }), { status: 404 })
-    }
+    // Check available quantity
+    const { data: item, error: itemErr } = await supabase
+      .from('items').select('available_qty').eq('id', item_id).single()
+    if (itemErr || !item) return NextResponse.json({ error: 'פריט לא נמצא' }, { status: 404 })
+    if (item.available_qty < quantity) return NextResponse.json({ error: 'אין מספיק יחידות זמינות' }, { status: 400 })
 
-    // Insert loan with price if provided
-    const loanData = {
+    // Insert loan — include event_date (may be null)
+    const { error: loanErr } = await supabase.from('loans').insert({
       item_id,
       borrower,
       quantity,
-      date_taken: new Date()
-    }
-    if (price !== undefined && price !== null) {
-      loanData.price = Number(price)
-    }
+      admin,
+      payment: price ?? -1,
+      event_date: event_date || null,
+      date_taken: new Date().toISOString(),
+    })
+    if (loanErr) throw loanErr
 
-    const { error } = await supabase.from('loans').insert(loanData)
-    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 400 })
+    // Decrement available_qty
+    const { error: updateErr } = await supabase
+      .from('items').update({ available_qty: item.available_qty - quantity }).eq('id', item_id)
+    if (updateErr) throw updateErr
 
-    await supabase
-      .from('items')
-      .update({ available_qty: itemData.available_qty - quantity })
-      .eq('id', item_id)
-
-    return new Response(JSON.stringify({ success: true }), { status: 200 })
+    return NextResponse.json({ success: true })
   } catch (err) {
-    return new Response(JSON.stringify({ error: err.message }), { status: 500 })
+    console.error('POST /api/loans error:', err)
+    return NextResponse.json({ error: err.message }, { status: 500 })
   }
 }
