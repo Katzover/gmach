@@ -15,6 +15,24 @@ export default function Home() {
   // Rounds monetary values to 2 decimal places to avoid floating-point drift
   function roundMoney(val) { return Math.round((val + Number.EPSILON) * 100) / 100 }
 
+  // ── AUTH ──
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
+  const [userRole, setUserRole] = useState(null) // 'admin' | 'viewer' | null (loading)
+
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then(r => r.json())
+      .then(d => setUserRole(d.role || 'viewer'))
+      .catch(() => setUserRole('viewer'))
+  }, [])
+
+  async function handleLogout() {
+    await fetch('/api/auth/logout', { method: 'POST' })
+    window.location.href = '/login'
+  }
+
+  const isAdmin = userRole === 'admin'
+
   const [showAddModal, setShowAddModal] = useState(false)
   const [showLoanModal, setShowLoanModal] = useState(null)
   const [showReturnModal, setShowReturnModal] = useState(null)
@@ -1054,11 +1072,16 @@ export default function Home() {
           <button className="hdr-btn" onClick={() => setShowMassMode(true)} data-tutorial="tutorial-list" title="מצב רשימה">
             <span className="icon">✅</span><span>רשימה</span>
           </button>
+          {isAdmin && (
           <button className="hdr-btn primary" data-tutorial="tutorial-add" onClick={() => setShowAddModal(true)} disabled={loadingAction || loadingItems}>
             <span className="icon">＋</span><span>פריט חדש</span>
           </button>
+          )}
           <button className="hdr-btn hdr-btn-tutorial" onClick={startTutorial} title="הדרכה">
             <span className="icon">🎓</span><span>הדרכה</span>
+          </button>
+          <button className="hdr-btn hdr-btn-logout" onClick={() => setShowLogoutConfirm(true)} title="יציאה">
+            <span className="icon">🚪</span><span>יציאה</span>
           </button>
 
         </div>
@@ -1109,10 +1132,12 @@ export default function Home() {
                   <img src={item.image_url} alt={item.name} />
 
                   <div className="card-header">
+                    {isAdmin && (
                     <button className="card-icon-btn" title="עריכה"
                       onClick={() => { setEditItem({ name: item.name, total_qty: item.total_qty, image: null }); setShowEditModal(item.id) }}>
                       ✏️
                     </button>
+                    )}
                     <button className="card-icon-btn" title="היסטוריה" disabled={loadingHistory} style={{ position: 'relative' }}
                       onClick={() => fetchLoanHistory(item.id)}>
                       ℹ️
@@ -1834,6 +1859,21 @@ export default function Home() {
         </div>
       )}
 
+      {/* ── LOGOUT CONFIRM ── */}
+      {showLogoutConfirm && (
+        <div className="modal" onMouseDown={() => setShowLogoutConfirm(false)}>
+          <div className="modal-form" style={{ maxWidth: '340px', textAlign: 'center' }} onMouseDown={e => e.stopPropagation()}>
+            <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🚪</div>
+            <h2 style={{ margin: '0 0 0.5rem' }}>יציאה מהמערכת</h2>
+            <p style={{ color: 'var(--text-2)', margin: '0 0 1.5rem', fontSize: '0.9rem' }}>האם אתם בטוחים שרוצים לצאת?</p>
+            <div className="modal-buttons">
+              <button className="btn btn-danger" onClick={handleLogout}>כן, צאו</button>
+              <button className="btn btn-ghost" onClick={() => setShowLogoutConfirm(false)}>ביטול</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── TUTORIAL OVERLAY ── */}
       {tutorialActive && (() => {
         const step = TUTORIAL_STEPS[tutorialStep]
@@ -1926,10 +1966,12 @@ export default function Home() {
           <span className="tab-icon">💬</span>
           <span className="tab-label">שלח</span>
         </button>
+        {isAdmin && (
         <button className="tab-btn tab-add" data-tutorial="tutorial-add" onClick={() => setShowAddModal(true)} disabled={loadingAction || loadingItems}>
           <span className="tab-icon-wrap">＋</span>
           <span className="tab-label">הוסף</span>
         </button>
+        )}
         <button className="tab-btn" data-tutorial="tutorial-list" onClick={() => setShowMassMode(true)}>
           <span className="tab-icon">✅</span>
           <span className="tab-label">רשימה</span>
@@ -1937,6 +1979,10 @@ export default function Home() {
         <button className="tab-btn" onClick={startTutorial}>
           <span className="tab-icon">🎓</span>
           <span className="tab-label">הדרכה</span>
+        </button>
+        <button className="tab-btn tab-logout" onClick={() => setShowLogoutConfirm(true)}>
+          <span className="tab-icon">🚪</span>
+          <span className="tab-label">יציאה</span>
         </button>
       </nav>
 

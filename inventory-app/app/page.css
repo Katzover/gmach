@@ -172,6 +172,17 @@ main {
 
 .hdr-btn .icon { font-size: 1rem; }
 
+.hdr-btn-logout {
+  color: var(--red);
+  border-color: rgba(248,113,113,0.2);
+  margin-right: 0.25rem;
+}
+.hdr-btn-logout:hover {
+  background: var(--red-dim);
+  border-color: rgba(248,113,113,0.4);
+  color: var(--red);
+}
+
 /* ── MESSAGE BANNER ──────────────────────────────────────────── */
 .message {
   display: flex;
@@ -1157,6 +1168,14 @@ input, select, textarea {
   .tab-btn.tab-add .tab-label {
     font-size: 0.55rem;
     color: var(--blue);
+  }
+
+  .tab-btn.tab-logout {
+    color: var(--red);
+    opacity: 0.75;
+  }
+  .tab-btn.tab-logout:active {
+    opacity: 1;
   }
 
   /* Card grid — 2 columns on mobile */
