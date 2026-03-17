@@ -1825,11 +1825,13 @@ export default function Home() {
                                       style={{ fontSize: '0.8rem', padding: '0.3rem 0.8rem' }}
                                       onClick={() => setPaymentMismatches(prev => prev.map((x, j) => j === i ? { ...x, status: 'fixed', paid: x.expected } : x))}
                                     >✓ שולם</button>
+                                    {isAdmin && (
                                     <button
                                       type="button" className="btn btn-ghost"
                                       style={{ fontSize: '0.8rem', padding: '0.3rem 0.6rem' }}
                                       onClick={() => setPaymentMismatches(prev => prev.map((x, j) => j === i ? { ...x, status: 'ignored' } : x))}
                                     >התעלם</button>
+                                    )}
                                   </div>
                               )}
                             </div>
