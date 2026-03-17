@@ -184,13 +184,20 @@ export default function Home() {
   const CATEGORIES = [
     { label: 'הכל' },
     { label: 'מפות',          keywords: ['מפות'] },
-    { label: 'מרכזי שולחן',   keywords: ['מרכז שולחן', 'פלייסמנט', 'ראנר', 'ספסל עץ למרכז', 'קוביות עץ', 'אגרטל', 'אגרטלי'] },
-    { label: 'פרחים',         keywords: ['פרח', 'ורד', 'ורדים', 'חמניה', 'זר פרחים', 'פרחים'] },
+    // מרכזי שולחן: placemats, table runners, table centerpieces, vases, wooden boards, decorative cubes, pitchers, ceramic pomegranates
+    { label: 'מרכזי שולחן',   keywords: ['מרכז שולחן', 'פלייסמנט', 'ראנר', 'ספסל עץ למרכז', 'קוביות עץ', 'אגרטל', 'אגרטלי', 'קנקן', 'רימוני'] },
+    // פרחים: flowers only — not pots/planters, not trays that happen to have "פרחים" in name
+    { label: 'פרחים',         keywords: ['פרחי ', 'ורדים', 'זר פרחים', 'פרחים לבנים'] },
+    // עציצים: pots and planters — including "עציץ חרס פרחים" (it's a pot, not flowers) and אדנית
     { label: 'עציצים',        keywords: ['עציץ', 'אדנית'] },
+    // מגשים: all trays regardless of decorative name
     { label: 'מגשים',         keywords: ['מגש', 'מגשי'] },
-    { label: 'שבת קודש',      keywords: ['פמוט', 'פמות', 'נרוני', 'מלחי', 'נטלה', 'עששית', 'סט פמוטים', 'קפה תה', 'פעמונים'] },
+    // שבת קודש: candles, havdalah, netilat yadayim, salt shakers, lanterns, Shabbat coffee/tea sets, bells for circumcision chair
+    { label: 'שבת קודש',      keywords: ['פמוט', 'פמות', 'נרוני', 'מלחי', 'נטלה', 'עששית', 'סט פמוטים', 'קפה תה', 'פעמונים', 'קערת נירוסטה'] },
   ]
 
+  // Priority map: for items that match multiple categories, use the first matching category
+  // Order in CATEGORIES array determines priority — more specific first
   function getItemCategory(name) {
     for (const cat of CATEGORIES) {
       if (!cat.keywords) continue
@@ -1825,13 +1832,11 @@ export default function Home() {
                                       style={{ fontSize: '0.8rem', padding: '0.3rem 0.8rem' }}
                                       onClick={() => setPaymentMismatches(prev => prev.map((x, j) => j === i ? { ...x, status: 'fixed', paid: x.expected } : x))}
                                     >✓ שולם</button>
-                                    {isAdmin && (
                                     <button
                                       type="button" className="btn btn-ghost"
                                       style={{ fontSize: '0.8rem', padding: '0.3rem 0.6rem' }}
                                       onClick={() => setPaymentMismatches(prev => prev.map((x, j) => j === i ? { ...x, status: 'ignored' } : x))}
                                     >התעלם</button>
-                                    )}
                                   </div>
                               )}
                             </div>
