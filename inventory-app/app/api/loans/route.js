@@ -21,7 +21,6 @@ export async function POST(request) {
       item_id,
       borrower,
       quantity,
-      admin,
       payment: price ?? -1,
       event_date: event_date || null,
       date_taken: new Date().toISOString(),
