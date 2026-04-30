@@ -36,6 +36,7 @@ export async function POST(request) {
     return NextResponse.json({ success: true })
   } catch (err) {
     console.error('POST /api/loans error:', err)
+    if (loanErr) return NextResponse.json({ raw: loanErr }, { status: 500 })
     return NextResponse.json({ error: err.message }, { status: 500 })
   }
 }
